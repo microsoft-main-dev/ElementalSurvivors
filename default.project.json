@@ -30,6 +30,13 @@
 			}
 		},
 
+		"Players": {
+			"$properties": {
+				"MaxPlayers": 8,
+				"RespawnTime": 3
+			}
+		},
+
 		"Lighting": {
 			"$properties": {
 				"Technology": "Voxel",
