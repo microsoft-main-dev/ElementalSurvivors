@@ -1,0 +1,20 @@
+{
+	"luau-lsp.platform.type": "roblox",
+	"luau-lsp.types.roblox": true,
+	"luau-lsp.sourcemap.enabled": true,
+	"luau-lsp.sourcemap.autogenerate": true,
+	"luau-lsp.sourcemap.rojoProjectFile": "default.project.json",
+	"luau-lsp.sourcemap.includeNonScripts": true,
+	"luau-lsp.completion.imports.enabled": true,
+	"files.eol": "\n",
+	"files.associations": {
+		"*.luau": "luau"
+	},
+	"editor.formatOnSave": true,
+	"[lua]": {
+		"editor.defaultFormatter": "JohnnyMorganz.stylua"
+	},
+	"[luau]": {
+		"editor.defaultFormatter": "JohnnyMorganz.stylua"
+	}
+}

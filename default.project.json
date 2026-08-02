@@ -1,0 +1,50 @@
+{
+	"name": "ElementalSurvivors",
+	"globIgnorePaths": ["**/.gitkeep"],
+	"tree": {
+		"$className": "DataModel",
+
+		"ReplicatedStorage": {
+			"Shared": {
+				"$path": "src/Shared"
+			}
+		},
+
+		"ServerScriptService": {
+			"Server": {
+				"$path": "src/Server"
+			}
+		},
+
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"Client": {
+					"$path": "src/Client"
+				}
+			}
+		},
+
+		"Workspace": {
+			"$properties": {
+				"StreamingEnabled": false
+			}
+		},
+
+		"Lighting": {
+			"$properties": {
+				"Technology": "Voxel",
+				"GlobalShadows": false,
+				"EnvironmentDiffuseScale": 0,
+				"EnvironmentSpecularScale": 0,
+				"Brightness": 2,
+				"ClockTime": 14,
+				"GeographicLatitude": 0,
+				"Ambient": [0.34, 0.38, 0.36],
+				"OutdoorAmbient": [0.34, 0.38, 0.36],
+				"FogColor": [0.09, 0.16, 0.13],
+				"FogStart": 140,
+				"FogEnd": 420
+			}
+		}
+	}
+}

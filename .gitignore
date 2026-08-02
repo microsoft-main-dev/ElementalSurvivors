@@ -1,0 +1,19 @@
+# Тулчейн Rokit (бинарники ставятся локально по rokit.toml)
+/rokit/
+
+# Файлы мест Roblox Studio — собираются из src/, в репозитории не нужны
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Артефакты сборки и служебные файлы
+/build/
+sourcemap.json
+roblox.yml
+
+# Мусор ОС и редакторов
+.DS_Store
+Thumbs.db
+*.log
+.vscode/settings.local.json
