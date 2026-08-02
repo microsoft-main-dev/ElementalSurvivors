@@ -20,7 +20,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Branding = require(Shared.Config.Branding)
-local Net = require(Shared.Net)
+local CombatService = require(script.Parent.CombatService)
 local Palette = require(Shared.Config.Palette)
 
 local LOBBY_FOLDER_NAME = "Lobby"
@@ -29,7 +29,6 @@ local LobbyService = {}
 
 local lobbyFolder: Folder? = nil
 local spawnLocation: SpawnLocation? = nil
-local notifyEvent: RemoteEvent? = nil
 
 --[[
 	Атмосфера. Lighting.Technology выставляется через default.project.json,
@@ -273,13 +272,11 @@ function LobbyService.Init(): ()
 	spawnLocation = buildSpawn(folder)
 
 	local prompt = buildPortal(folder)
-	notifyEvent = Net.GetEvent(Net.Id.Notify)
 
+	-- Дистанцию и наличие персонажа проверяет сам ProximityPrompt на сервере,
+	-- остальные проверки (свободный слот, повторный вход, кулдаун) — в CombatService.
 	prompt.Triggered:Connect(function(player: Player)
-		local event = notifyEvent
-		if event then
-			event:FireClient(player, "Arenas open in the next milestone.")
-		end
+		CombatService.BeginRun(player)
 	end)
 
 	lobbyFolder = folder

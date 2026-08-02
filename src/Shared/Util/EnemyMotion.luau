@@ -1,0 +1,113 @@
+--!strict
+--[[
+	EnemyMotion — вся математика движения врагов.
+
+	Строго чистые функции: ни одного обращения к Instance, ни одного глобального
+	состояния. Это требование раздела 3.2 ТЗ — при упоре в CPU движение и
+	расталкивание выносятся в parallel Luau без переписывания.
+
+	Тот же код работает на клиенте (раздел 3.3): клиент повторяет ТОЛЬКО Chase.
+	Расталкивание остаётся серверным — у клиента другой набор соседей
+	(часть врагов ещё не доехала событием спавна), и повторение Separation
+	накапливало бы расхождение вместо того, чтобы его гасить.
+
+	Позиции — локальные координаты арены, Y всегда 0: враги двигаются по плоскости,
+	высота добавляется только при отрисовке.
+]]
+
+local EnemyMotion = {}
+
+-- Шаг к цели по прямой. Возвращает новую позицию.
+function EnemyMotion.Chase(position: Vector3, target: Vector3, speed: number, dt: number): Vector3
+	local dx = target.X - position.X
+	local dz = target.Z - position.Z
+	local distanceSquared = dx * dx + dz * dz
+
+	if distanceSquared < 1e-6 then
+		return position
+	end
+
+	local distance = math.sqrt(distanceSquared)
+	local step = math.min(speed * dt, distance)
+	local inverse = step / distance
+
+	return Vector3.new(position.X + dx * inverse, 0, position.Z + dz * inverse)
+end
+
+--[[
+	Мягкое расталкивание соседей, чтобы толпа не слипалась в одну точку.
+
+	neighbourIds/positions — результат SpatialHash.Collect: массив индексов
+	и общий массив позиций. Свой собственный id в списке игнорируется.
+	Сила падает линейно от радиуса к нулю — это дешевле обратного квадрата
+	и не даёт взрывных выбросов при полном совпадении позиций.
+]]
+function EnemyMotion.Separation(
+	selfId: number,
+	position: Vector3,
+	neighbourIds: { number },
+	positions: { Vector3 },
+	count: number,
+	radius: number,
+	strength: number,
+	dt: number
+): Vector3
+	if count <= 1 then
+		return position
+	end
+
+	local pushX = 0
+	local pushZ = 0
+	local inverseRadius = 1 / radius
+
+	for index = 1, count do
+		local id = neighbourIds[index]
+		if id ~= selfId then
+			local other = positions[id]
+			local dx = position.X - other.X
+			local dz = position.Z - other.Z
+			local distanceSquared = dx * dx + dz * dz
+
+			if distanceSquared < 1e-6 then
+				-- Позиции совпали: расталкиваем детерминированно, по разнице id,
+				-- иначе враги останутся склеенными навсегда.
+				local angle = (selfId - id) * 0.7
+				pushX += math.cos(angle)
+				pushZ += math.sin(angle)
+			elseif distanceSquared < radius * radius then
+				local distance = math.sqrt(distanceSquared)
+				local weight = (1 - distance * inverseRadius) / distance
+				pushX += dx * weight
+				pushZ += dz * weight
+			end
+		end
+	end
+
+	if pushX == 0 and pushZ == 0 then
+		return position
+	end
+
+	local scale = strength * dt
+	return Vector3.new(position.X + pushX * scale, 0, position.Z + pushZ * scale)
+end
+
+--[[
+	Покачивание вместо скелетной анимации (раздел 2.1 ТЗ).
+	phase разводит врагов по фазе, чтобы толпа не пульсировала синхронно.
+]]
+function EnemyMotion.BobOffset(phase: number, time: number, speed: number, amplitude: number): number
+	return math.sin(time * speed + phase) * amplitude
+end
+
+-- Удержание врага внутри квадратной арены со стороной size (центр в нуле).
+function EnemyMotion.ClampToArena(position: Vector3, size: number): Vector3
+	local limit = size * 0.5 - 2
+	local x = math.clamp(position.X, -limit, limit)
+	local z = math.clamp(position.Z, -limit, limit)
+	if x == position.X and z == position.Z then
+		return position
+	end
+	return Vector3.new(x, 0, z)
+end
+
+return EnemyMotion
