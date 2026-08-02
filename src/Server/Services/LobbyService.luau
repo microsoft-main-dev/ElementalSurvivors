@@ -45,14 +45,31 @@ local function applyLighting(): ()
 	Lighting.Ambient = Palette.Lobby.floorAccent
 	Lighting.OutdoorAmbient = Palette.Lobby.floorAccent
 	Lighting.FogColor = Palette.UI.background
-	Lighting.FogStart = 140
-	Lighting.FogEnd = 420
+	Lighting.FogStart = Balance.Lobby.fogStart
+	Lighting.FogEnd = Balance.Lobby.fogEnd
 
+	--[[
+		Atmosphere отключает FogStart/FogEnd целиком, поэтому его быть не должно.
+		Вместо стандартного неба — Sky с пустыми текстурами: он даёт ровный тёмный
+		фон без единого ассета. Без этого горизонт остаётся ярко-голубым,
+		и туман на его фоне не читается.
+	]]
 	for _, child in Lighting:GetChildren() do
 		if child:IsA("Sky") or child:IsA("Atmosphere") then
 			child:Destroy()
 		end
 	end
+
+	local sky = Instance.new("Sky")
+	sky.SkyboxBk = ""
+	sky.SkyboxDn = ""
+	sky.SkyboxFt = ""
+	sky.SkyboxLf = ""
+	sky.SkyboxRt = ""
+	sky.SkyboxUp = ""
+	sky.CelestialBodiesShown = false
+	sky.StarCount = 0
+	sky.Parent = Lighting
 end
 
 -- Убирает стандартные объекты пустого места, чтобы они не мешали лобби.

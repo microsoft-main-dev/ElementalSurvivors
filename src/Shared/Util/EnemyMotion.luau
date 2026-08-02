@@ -46,7 +46,7 @@ function EnemyMotion.Separation(
 	selfId: number,
 	position: Vector3,
 	neighbourIds: { number },
-	positions: { Vector3 },
+	positions: { [number]: Vector3 },
 	count: number,
 	radius: number,
 	strength: number,

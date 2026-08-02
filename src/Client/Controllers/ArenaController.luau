@@ -68,15 +68,24 @@ end
 
 local function applyArenaLighting(): ()
 	Lighting.FogColor = Palette.Arena.fog
-	Lighting.FogStart = 80
-	Lighting.FogEnd = 260
-	Lighting.Ambient = Palette.Arena.floorAccent
-	Lighting.OutdoorAmbient = Palette.Arena.floorAccent
+	Lighting.FogStart = Balance.Arena.fogStart
+	Lighting.FogEnd = Balance.Arena.fogEnd
+	Lighting.Ambient = Palette.Arena.floor
+	Lighting.OutdoorAmbient = Palette.Arena.floor
 end
 
 --[[
-	Декор из примитивов по seed (раздел 5 ТЗ). Центр арены оставляем пустым,
-	чтобы игрок не появился внутри камня.
+	Декор из примитивов по seed (раздел 5 ТЗ).
+
+	Декор намеренно ПЛОСКИЙ — плиты и полосы на полу высотой меньше стада.
+	Сплошных колонн здесь не будет: враги считаются чистой математикой без поиска
+	пути, поэтому непроходимая колонна остановила бы игрока, а толпа прошла бы
+	сквозь неё насквозь и окружила его — это ловушка, а не укрытие.
+	Плоский декор решает ту же задачу (арены по seed отличаются друг от друга)
+	и при этом не обещает того, чего не делает.
+
+	Если когда-нибудь понадобятся именно препятствия — это отдельная задача:
+	они должны строиться на сервере и учитываться в движении врагов.
 ]]
 local function buildDecor(origin: Vector3, seed: number): ()
 	local folder = Instance.new("Folder")
@@ -85,26 +94,24 @@ local function buildDecor(origin: Vector3, seed: number): ()
 
 	local rng = RNG.new(seed)
 	local half = Balance.Arena.size * 0.5 - 12
-	local keepClear = 40
 
 	for index = 1, Balance.Arena.decorCount do
-		local x, z
-		repeat
-			x = rng.NextNumber(-half, half)
-			z = rng.NextNumber(-half, half)
-		until math.abs(x) > keepClear or math.abs(z) > keepClear
+		local x = rng.NextNumber(-half, half)
+		local z = rng.NextNumber(-half, half)
 
-		local height = rng.NextNumber(4, 16)
-		local width = rng.NextNumber(4, 12)
+		local isAccent = rng.NextNumber(0, 1) > 0.82
+		local length = rng.NextNumber(10, 34)
+		local width = if isAccent then rng.NextNumber(1.2, 2.4) else rng.NextNumber(6, 20)
+		local height = rng.NextNumber(0.2, 0.5)
 
 		local part = Instance.new("Part")
 		part.Name = `Decor{index}`
-		part.Size = Vector3.new(width, height, width)
+		part.Size = Vector3.new(length, height, width)
 		part.CFrame = CFrame.new(origin + Vector3.new(x, height * 0.5, z)) * CFrame.Angles(0, rng.NextAngle(), 0)
-		part.Color = if rng.NextNumber(0, 1) > 0.75 then Palette.Arena.decorAccent else Palette.Arena.decor
-		part.Material = Enum.Material.SmoothPlastic
+		part.Color = if isAccent then Palette.Arena.decorAccent else Palette.Arena.decor
+		part.Material = if isAccent then Enum.Material.Neon else Enum.Material.SmoothPlastic
 		part.Anchored = true
-		part.CanCollide = false -- декор не должен ловить игрока в углу
+		part.CanCollide = false
 		part.CanQuery = false
 		part.CanTouch = false
 		part.CastShadow = false

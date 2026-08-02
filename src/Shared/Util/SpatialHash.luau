@@ -21,7 +21,7 @@
 ]]
 
 export type SpatialHash = {
-	Rebuild: (positions: { Vector3 }, alive: { boolean }, highWater: number) -> (),
+	Rebuild: (positions: { [number]: Vector3 }, alive: { [number]: boolean }, highWater: number) -> (),
 	Collect: (position: Vector3, radius: number, out: { number }) -> number,
 	ForEachNear: (position: Vector3, radius: number, fn: (id: number) -> ()) -> (),
 	Clear: () -> (),
@@ -48,7 +48,7 @@ function SpatialHash.new(cellSize: number): SpatialHash
 	local usedKeys: { number } = {}
 	local usedCount = 0
 
-	local positionsRef: { Vector3 } = {}
+	local positionsRef: { [number]: Vector3 } = {}
 	local scratch: { number } = {}
 
 	local api = {}
@@ -60,7 +60,7 @@ function SpatialHash.new(cellSize: number): SpatialHash
 		usedCount = 0
 	end
 
-	function api.Rebuild(positions: { Vector3 }, alive: { boolean }, highWater: number): ()
+	function api.Rebuild(positions: { [number]: Vector3 }, alive: { [number]: boolean }, highWater: number): ()
 		api.Clear()
 		positionsRef = positions
 

@@ -2,17 +2,21 @@
 --[[
 	EnemyRenderController — отрисовка врагов (раздел 3.3 ТЗ).
 
-	Сервер шлёт только события (спавн/смерть) пачками раз в 100 мс и по кругу
-	досылает точные позиции части врагов. Между этими сообщениями клиент
-	симулирует движение сам тем же кодом из Shared/Util/EnemyMotion.
+	Сервер шлёт события (спавн/смерть) пачками раз в 100 мс и по кругу досылает
+	точные позиции части врагов. Между этими сообщениями клиент симулирует
+	движение сам тем же кодом из Shared/Util/EnemyMotion.
 
-	Клиент повторяет ТОЛЬКО преследование, без расталкивания: у него другой набор
-	соседей, и Separation здесь накапливал бы расхождение вместо того, чтобы
-	его гасить. Разница между клиентом и сервером ограничена радиусом
-	расталкивания (пара стадов) и постоянно подрезается ресинхронизацией.
+	События применяются СТРОГО в порядке получения. Сервер переиспользует id
+	умерших врагов почти сразу, поэтому в одной пачке id может быть сначала
+	освобождён, а потом выдан новому врагу. Любая перестановка приводит
+	к брошенным частям на арене и невидимым живым врагам.
 
-	Ноль Instance.new в бою: все части берутся из пула. Части без коллизий,
-	без запросов и без физики — они чистая графика.
+	Клиент повторяет и преследование, и расталкивание — тем же шагом 1/30 с,
+	что и сервер. Без расталкивания толпа на клиенте схлопывалась в плотный ком
+	вокруг игрока, и то, что видно на экране, переставало совпадать с тем,
+	по чему считается урон. Расхождение снимает круговая ресинхронизация.
+
+	Ноль Instance.new в бою: все части берутся из пула.
 
 	Публичный API:
 		EnemyRenderController.GetActiveCount() -> number   (для отладочного оверлея)
@@ -31,6 +35,7 @@ local Net = require(Shared.Net)
 local Packet = require(Shared.Util.Packet)
 local Palette = require(Shared.Config.Palette)
 local Pool = require(Shared.Util.Pool)
+local SpatialHash = require(Shared.Util.SpatialHash)
 
 local DEATH_FLASH_TIME = 0.09
 local PREWARM = 340
@@ -41,25 +46,27 @@ local player = Players.LocalPlayer
 
 local active = false
 local origin = Vector3.zero
+local accumulator = 0
 
 -- Состояние врагов, индексируется серверным id.
-local positions: { Vector3 } = {}
-local offsets: { Vector3 } = {} -- невязка после ресинхронизации, затухает к нулю
-local typeIds: { number } = {}
-local phases: { number } = {}
-local parts: { Part? } = {}
--- Разреженный словарь, а не массив: мёртвые id удаляются, чтобы обход
--- каждого кадра шёл только по живым врагам.
+local positions: { [number]: Vector3 } = {}
+local offsets: { [number]: Vector3 } = {} -- невязка после ресинхронизации, затухает к нулю
+local typeIds: { [number]: number } = {}
+local phases: { [number]: number } = {}
+local parts: { [number]: Part } = {}
 local isAlive: { [number]: boolean } = {}
+local highWater = 0
 local activeCount = 0
 
--- Гаснущие части убитых врагов: {часть, момент возврата в пул}.
+-- Гаснущие части убитых врагов.
 local fadingParts: { Part } = {}
 local fadingUntil: { number } = {}
 local fadingCount = 0
 
 local container: Folder? = nil
 local partPool: Pool.Pool<Part>? = nil
+local hash = SpatialHash.new(Balance.Combat.cellSize)
+local neighbours: { number } = {}
 
 -- Переиспользуемые массивы для BulkMoveTo и разбора пакетов.
 local moveParts: { BasePart } = {}
@@ -109,17 +116,29 @@ local function clearAll(): ()
 	table.clear(isAlive)
 	table.clear(fadingParts)
 	table.clear(fadingUntil)
+	table.clear(moveParts)
+	table.clear(moveCFrames)
+	hash.Clear()
+
+	highWater = 0
 	activeCount = 0
 	fadingCount = 0
 	lastMoveCount = 0
-	table.clear(moveParts)
-	table.clear(moveCFrames)
+	accumulator = 0
 end
 
 local function applySpawn(id: number, typeId: number, position: Vector3): ()
 	local def = Enemies.List[typeId]
 	if not def then
 		return
+	end
+
+	-- Страховка от потерянной смерти: если id всё ещё занят, часть надо вернуть
+	-- в пул, иначе она останется висеть на арене навсегда.
+	local previous = parts[id]
+	if previous then
+		getPool().Release(previous)
+		parts[id] = nil
 	end
 
 	local part = getPool().Get()
@@ -140,12 +159,13 @@ local function applySpawn(id: number, typeId: number, position: Vector3): ()
 	phases[id] = (id % 32) * 0.4
 	parts[id] = part
 	isAlive[id] = true
+
+	if id > highWater then
+		highWater = id
+	end
 end
 
 local function applyDespawn(id: number, reason: number): ()
-	if not isAlive[id] then
-		return
-	end
 	isAlive[id] = nil
 
 	local part = parts[id]
@@ -194,6 +214,78 @@ local function getPlayerLocalPosition(): Vector3?
 	return Vector3.new(world.X, 0, world.Z)
 end
 
+-- Один шаг симуляции, тот же 1/30 с, что и на сервере.
+local function simulate(dt: number, playerLocal: Vector3): ()
+	hash.Rebuild(positions, isAlive, highWater)
+
+	local separationRadius = Balance.Combat.separationRadius
+	local separationStrength = Balance.Combat.separationStrength
+	local arenaSize = Balance.Arena.size
+	local decay = math.clamp(dt / Balance.Combat.resyncBlendTime, 0, 1)
+
+	for id = 1, highWater do
+		if isAlive[id] then
+			local def = Enemies.List[typeIds[id]]
+			local position = EnemyMotion.Chase(positions[id], playerLocal, def.stats.speed, dt)
+
+			local count = hash.Collect(position, separationRadius, neighbours)
+			position = EnemyMotion.Separation(
+				id,
+				position,
+				neighbours,
+				positions,
+				count,
+				separationRadius,
+				separationStrength,
+				dt
+			)
+
+			positions[id] = EnemyMotion.ClampToArena(position, arenaSize)
+
+			local offset = offsets[id]
+			if offset ~= Vector3.zero then
+				offsets[id] = offset:Lerp(Vector3.zero, decay)
+			end
+		end
+	end
+end
+
+local function render(now: number): ()
+	local bobSpeed = Balance.Combat.bobSpeed
+	local bobAmplitude = Balance.Combat.bobAmplitude
+	local count = 0
+
+	for id = 1, highWater do
+		if isAlive[id] then
+			local part = parts[id]
+			if part then
+				local def = Enemies.List[typeIds[id]]
+				local position = positions[id]
+				local offset = offsets[id]
+				local bob = EnemyMotion.BobOffset(phases[id], now, bobSpeed, bobAmplitude)
+
+				count += 1
+				moveParts[count] = part
+				moveCFrames[count] = CFrame.new(
+					origin + Vector3.new(position.X + offset.X, def.model.size.Y * 0.5 + bob, position.Z + offset.Z)
+				)
+			end
+		end
+	end
+
+	-- Хвост от прошлого кадра надо обнулить, иначе BulkMoveTo подвинет лишнее.
+	for index = count + 1, lastMoveCount do
+		moveParts[index] = nil :: any
+		moveCFrames[index] = nil :: any
+	end
+	lastMoveCount = count
+	activeCount = count
+
+	if count > 0 then
+		Workspace:BulkMoveTo(moveParts, moveCFrames, Enum.BulkMoveMode.FireCFrameChanged)
+	end
+end
+
 local function onHeartbeat(deltaTime: number): ()
 	local now = os.clock()
 	updateFading(now)
@@ -207,55 +299,27 @@ local function onHeartbeat(deltaTime: number): ()
 		return
 	end
 
-	-- Затухание невязки: врага не дёргает при ресинхронизации, он подъезжает.
-	local decay = math.clamp(deltaTime / Balance.Combat.resyncBlendTime, 0, 1)
-	local bobSpeed = Balance.Combat.bobSpeed
-	local bobAmplitude = Balance.Combat.bobAmplitude
+	local tickRate = Balance.Combat.tickRate
+	accumulator += deltaTime
 
-	local count = 0
-	activeCount = 0
-
-	for id, aliveFlag in isAlive do
-		if aliveFlag then
-			local part = parts[id]
-			if part then
-				local def = Enemies.List[typeIds[id]]
-				local position = EnemyMotion.Chase(positions[id], playerLocal, def.stats.speed, deltaTime)
-				positions[id] = position
-
-				local offset = offsets[id]
-				if offset ~= Vector3.zero then
-					offset = offset:Lerp(Vector3.zero, decay)
-					offsets[id] = offset
-				end
-
-				local bob = EnemyMotion.BobOffset(phases[id], now, bobSpeed, bobAmplitude)
-				local height = def.model.size.Y * 0.5 + bob
-
-				count += 1
-				moveParts[count] = part
-				moveCFrames[count] =
-					CFrame.new(origin + Vector3.new(position.X + offset.X, height, position.Z + offset.Z))
-				activeCount += 1
-			end
-		end
+	local steps = 0
+	while accumulator >= tickRate and steps < Balance.Combat.maxStepsPerFrame do
+		accumulator -= tickRate
+		steps += 1
+		simulate(tickRate, playerLocal)
 	end
 
-	-- Хвост от прошлого кадра надо обнулить, иначе BulkMoveTo подвинет лишнее.
-	for index = count + 1, lastMoveCount do
-		moveParts[index] = nil :: any
-		moveCFrames[index] = nil :: any
+	if accumulator >= tickRate then
+		accumulator = 0
 	end
-	lastMoveCount = count
 
-	if count > 0 then
-		Workspace:BulkMoveTo(moveParts, moveCFrames, Enum.BulkMoveMode.FireCFrameChanged)
+	if steps > 0 then
+		render(now)
 	end
 end
 
 local function onRunStarted(slot: number, _seed: number): ()
 	clearAll()
-
 	origin = Vector3.new(slot * Balance.Arena.spacing, 0, 0)
 
 	local folder = Instance.new("Folder")
@@ -289,12 +353,13 @@ local function onEvents(data: buffer): ()
 		return
 	end
 
-	local spawns, despawns = Packet.ReadEvents(data)
-	for _, record in spawns do
-		applySpawn(record.id, record.typeId, record.position)
-	end
-	for _, record in despawns do
-		applyDespawn(record.id, record.reason)
+	-- Порядок событий значим: применяем ровно в том, в котором они пришли.
+	for _, event in Packet.ReadEvents(data) do
+		if event.kind == Packet.Kind.Spawn then
+			applySpawn(event.id, event.aux, Vector3.new(event.x, 0, event.z))
+		else
+			applyDespawn(event.id, event.aux)
+		end
 	end
 end
 

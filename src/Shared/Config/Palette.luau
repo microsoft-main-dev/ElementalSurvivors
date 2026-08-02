@@ -38,13 +38,18 @@ local Palette = {
 		sign = Color3.fromHex("#1A241F"),
 	}),
 
-	-- Арена. В M1 одна палитра; в M6 их станет 20 по числу локаций (раздел 5.1 ТЗ).
+	--[[
+		Арена. В M1 одна палитра; в M6 их станет 20 по числу локаций (раздел 5.1 ТЗ).
+
+		Пол намеренно светлее тумана: туман виден только как контраст,
+		а тёмный туман поверх тёмного пола не читается вообще.
+	]]
 	Arena = table.freeze({
-		floor = Color3.fromHex("#1C2A2E"),
-		floorAccent = Color3.fromHex("#243539"),
-		decor = Color3.fromHex("#2C4046"),
-		decorAccent = Color3.fromHex("#38565E"),
-		fog = Color3.fromHex("#0D1719"),
+		floor = Color3.fromHex("#2E4349"),
+		floorAccent = Color3.fromHex("#3A5359"),
+		decor = Color3.fromHex("#3E5A62"),
+		decorAccent = Color3.fromHex("#54A08F"),
+		fog = Color3.fromHex("#080E10"),
 		exit = Color3.fromHex("#E2603A"),
 	}),
 

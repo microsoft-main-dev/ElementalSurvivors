@@ -72,15 +72,16 @@ type Sim = {
 	spawnCredit: number,
 	cullTimer: number,
 
-	-- Репликация
+	-- Репликация. События лежат ОДНИМ потоком в порядке возникновения:
+	-- id умерших переиспользуются сразу, и перестановка спавнов со смертями
+	-- ломала бы соответствие id врагу на клиенте.
 	eventTimer: number,
-	spawnIds: { number },
-	spawnTypeIds: { number },
-	spawnPositions: { Vector3 },
-	spawnCount: number,
-	despawnIds: { number },
-	despawnReasons: { number },
-	despawnCount: number,
+	eventKinds: { number },
+	eventIds: { number },
+	eventAux: { number },
+	eventX: { number },
+	eventZ: { number },
+	eventCount: number,
 	resyncCursor: number,
 	resyncCredit: number,
 	resyncIds: { number },
@@ -149,15 +150,23 @@ local function allocate(sim: Sim): number?
 	return id
 end
 
+local function pushEvent(sim: Sim, kind: number, id: number, aux: number, x: number, z: number): ()
+	local index = sim.eventCount + 1
+	sim.eventCount = index
+	sim.eventKinds[index] = kind
+	sim.eventIds[index] = id
+	sim.eventAux[index] = aux
+	sim.eventX[index] = x
+	sim.eventZ[index] = z
+end
+
 local function release(sim: Sim, id: number, reason: number): ()
 	sim.alive[id] = false
 	sim.aliveCount -= 1
 	sim.freeCount += 1
 	sim.freeList[sim.freeCount] = id
 
-	sim.despawnCount += 1
-	sim.despawnIds[sim.despawnCount] = id
-	sim.despawnReasons[sim.despawnCount] = reason
+	pushEvent(sim, Packet.Kind.Despawn, id, reason, 0, 0)
 end
 
 local function spawnOne(sim: Sim, def: EnemyDef, playerLocal: Vector3): ()
@@ -178,10 +187,7 @@ local function spawnOne(sim: Sim, def: EnemyDef, playerLocal: Vector3): ()
 	sim.alive[id] = true
 	sim.aliveCount += 1
 
-	sim.spawnCount += 1
-	sim.spawnIds[sim.spawnCount] = id
-	sim.spawnTypeIds[sim.spawnCount] = def.typeId
-	sim.spawnPositions[sim.spawnCount] = position
+	pushEvent(sim, Packet.Kind.Spawn, id, def.typeId, position.X, position.Z)
 end
 
 local function spawnStep(sim: Sim, dt: number, playerLocal: Vector3): ()
@@ -349,22 +355,20 @@ local function replicationStep(sim: Sim, dt: number): ()
 	sim.eventTimer += dt
 	if sim.eventTimer >= Balance.Combat.eventInterval then
 		sim.eventTimer = 0
-		if sim.spawnCount > 0 or sim.despawnCount > 0 then
+		if sim.eventCount > 0 then
 			local remote = eventsRemote
 			if remote then
 				local data = Packet.WriteEvents(
-					sim.spawnIds,
-					sim.spawnTypeIds,
-					sim.spawnPositions,
-					sim.spawnCount,
-					sim.despawnIds,
-					sim.despawnReasons,
-					sim.despawnCount
+					sim.eventKinds,
+					sim.eventIds,
+					sim.eventAux,
+					sim.eventX,
+					sim.eventZ,
+					sim.eventCount
 				)
 				remote:FireClient(sim.player, data)
 			end
-			sim.spawnCount = 0
-			sim.despawnCount = 0
+			sim.eventCount = 0
 		end
 	end
 
@@ -463,13 +467,12 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		cullTimer = 0,
 
 		eventTimer = 0,
-		spawnIds = {},
-		spawnTypeIds = {},
-		spawnPositions = {},
-		spawnCount = 0,
-		despawnIds = {},
-		despawnReasons = {},
-		despawnCount = 0,
+		eventKinds = {},
+		eventIds = {},
+		eventAux = {},
+		eventX = {},
+		eventZ = {},
+		eventCount = 0,
 		resyncCursor = 0,
 		resyncCredit = 0,
 		resyncIds = {},
