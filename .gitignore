@@ -12,6 +12,9 @@
 sourcemap.json
 roblox.yml
 
+# Локальные настройки Claude Code (у каждого свои)
+.claude/settings.local.json
+
 # Мусор ОС и редакторов
 .DS_Store
 Thumbs.db

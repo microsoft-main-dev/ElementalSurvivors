@@ -1,0 +1,7 @@
+# Переводы строк в рабочей копии всегда LF — так же, как требует stylua.toml.
+# Без этого Windows подставит CRLF, и `stylua --check src` начнёт падать на ровном месте.
+* text=auto eol=lf
+
+# Файлы мест Roblox — бинарные, git не должен пытаться их сливать.
+*.rbxl binary
+*.rbxm binary
