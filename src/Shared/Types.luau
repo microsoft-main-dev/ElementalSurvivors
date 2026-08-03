@@ -116,8 +116,9 @@ export type AbilityView = {
 	key: string,
 	level: number,
 	cooldown: number, -- сколько осталось до срабатывания
-	maxCooldown: number,
+	maxCooldown: number, -- ноль означает «кулдауна нет», иконка не затемняется
 	phase: number, -- угол орбиты; нужен, чтобы орбы на клиенте совпали с сервером
+	damage: number, -- суммарный урон способности за забег
 }
 
 -- Карточка выбора при левел-апе.

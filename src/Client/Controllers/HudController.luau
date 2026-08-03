@@ -37,6 +37,14 @@ local killsLabel: TextLabel? = nil
 local healthFill: Frame? = nil
 local healthLabel: TextLabel? = nil
 local iconRow: Frame? = nil
+local damagePanel: Frame? = nil
+
+type DamageRow = {
+	holder: Frame,
+	nameLabel: TextLabel,
+	valueLabel: TextLabel,
+}
+local damageRows: { [string]: DamageRow } = {}
 
 type Icon = {
 	holder: Frame,
@@ -100,30 +108,64 @@ local function build(): ()
 	gui.Parent = playerGui
 	screen = gui
 
-	-- Полоса опыта во всю ширину сверху.
+	-- Полоса опыта: по центру сверху, не во всю ширину.
 	local xpTrack, fill = makeBar(gui, "XpBar", Palette.UI.accent)
-	xpTrack.Position = UDim2.fromScale(0, 0)
-	xpTrack.Size = UDim2.new(1, 0, 0, 10)
+	xpTrack.AnchorPoint = Vector2.new(0.5, 0)
+	xpTrack.Position = UDim2.new(0.5, 0, 0, 10)
+	xpTrack.Size = UDim2.new(0.42, 0, 0, 14)
 	xpFill = fill
 
-	local level = makeLabel(gui, "Level", 16)
-	level.Position = UDim2.fromOffset(10, 12)
-	level.Size = UDim2.fromOffset(120, 20)
-	level.TextXAlignment = Enum.TextXAlignment.Left
+	local level = makeLabel(xpTrack, "Level", 12)
+	level.Size = UDim2.fromScale(1, 1)
+	level.ZIndex = 2
 	levelLabel = level
 
 	local timer = makeLabel(gui, "Timer", 26)
 	timer.AnchorPoint = Vector2.new(0.5, 0)
-	timer.Position = UDim2.new(0.5, 0, 0, 12)
+	timer.Position = UDim2.new(0.5, 0, 0, 30)
 	timer.Size = UDim2.fromOffset(140, 30)
 	timerLabel = timer
 
 	local kills = makeLabel(gui, "Kills", 16)
 	kills.AnchorPoint = Vector2.new(1, 0)
-	kills.Position = UDim2.new(1, -10, 0, 12)
+	kills.Position = UDim2.new(1, -10, 0, 10)
 	kills.Size = UDim2.fromOffset(140, 20)
 	kills.TextXAlignment = Enum.TextXAlignment.Right
 	killsLabel = kills
+
+	--[[
+		Панель урона по способностям. Нужна была для проверки M2, но остаётся
+		насовсем: тот же список с сортировкой требует экран результатов
+		в разделе 8 ТЗ, и считается он из тех же чисел.
+	]]
+	local damage = Instance.new("Frame")
+	damage.Name = "DamageMeter"
+	damage.AnchorPoint = Vector2.new(1, 0)
+	damage.Position = UDim2.new(1, -10, 0, 34)
+	damage.Size = UDim2.fromOffset(190, 0)
+	damage.AutomaticSize = Enum.AutomaticSize.Y
+	damage.BackgroundColor3 = Palette.UI.panel
+	damage.BackgroundTransparency = 0.35
+	damage.BorderSizePixel = 0
+	damage.Parent = gui
+	damagePanel = damage
+
+	local damageCorner = Instance.new("UICorner")
+	damageCorner.CornerRadius = UDim.new(0, 6)
+	damageCorner.Parent = damage
+
+	local damagePadding = Instance.new("UIPadding")
+	damagePadding.PaddingTop = UDim.new(0, 5)
+	damagePadding.PaddingBottom = UDim.new(0, 5)
+	damagePadding.PaddingLeft = UDim.new(0, 8)
+	damagePadding.PaddingRight = UDim.new(0, 8)
+	damagePadding.Parent = damage
+
+	local damageLayout = Instance.new("UIListLayout")
+	damageLayout.FillDirection = Enum.FillDirection.Vertical
+	damageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	damageLayout.Padding = UDim.new(0, 2)
+	damageLayout.Parent = damage
 
 	-- Здоровье снизу по центру: под большим пальцем ничего важного нет.
 	local healthTrack, healthBar = makeBar(gui, "HealthBar", Palette.UI.danger)
@@ -219,6 +261,72 @@ local function getIcon(key: string, order: number): Icon
 	return icon
 end
 
+local function getDamageRow(key: string): DamageRow
+	local existing = damageRows[key]
+	if existing then
+		return existing
+	end
+
+	local def = Abilities.ByKey[key]
+	local color = if def then Palette.Element[def.element] else Palette.UI.accent
+
+	local holder = Instance.new("Frame")
+	holder.Name = key
+	holder.Size = UDim2.new(1, 0, 0, 16)
+	holder.BackgroundTransparency = 1
+	holder.Parent = damagePanel
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.fromScale(0.62, 1)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Font = Enum.Font.Gotham
+	nameLabel.Text = if def then def.displayName else key
+	nameLabel.TextColor3 = color
+	nameLabel.TextSize = 13
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	nameLabel.Parent = holder
+
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.AnchorPoint = Vector2.new(1, 0)
+	valueLabel.Position = UDim2.fromScale(1, 0)
+	valueLabel.Size = UDim2.fromScale(0.38, 1)
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.Font = Enum.Font.Code
+	valueLabel.Text = "0"
+	valueLabel.TextColor3 = Palette.UI.text
+	valueLabel.TextSize = 13
+	valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+	valueLabel.Parent = holder
+
+	local row: DamageRow = { holder = holder, nameLabel = nameLabel, valueLabel = valueLabel }
+	damageRows[key] = row
+	return row
+end
+
+-- Список урона по способностям, отсортированный по убыванию.
+local function updateDamageMeter(abilities: { Types.AbilityView }): ()
+	local sorted = table.clone(abilities)
+	table.sort(sorted, function(a: Types.AbilityView, b: Types.AbilityView): boolean
+		return a.damage > b.damage
+	end)
+
+	local seen: { [string]: boolean } = {}
+	for order, view in sorted do
+		seen[view.key] = true
+		local row = getDamageRow(view.key)
+		row.holder.LayoutOrder = order
+		row.valueLabel.Text = string.format("%d", view.damage)
+	end
+
+	for key, row in damageRows do
+		if not seen[key] then
+			row.holder:Destroy()
+			damageRows[key] = nil
+		end
+	end
+end
+
 local function updateHealth(): ()
 	local fill = healthFill
 	local label = healthLabel
@@ -286,6 +394,7 @@ local function onHeartbeat(deltaTime: number): ()
 		end
 	end
 
+	updateDamageMeter(current.abilities)
 	updateHealth()
 end
 
@@ -300,6 +409,10 @@ local function setVisible(visible: boolean): ()
 		for key, icon in icons do
 			icon.holder:Destroy()
 			icons[key] = nil
+		end
+		for key, row in damageRows do
+			row.holder:Destroy()
+			damageRows[key] = nil
 		end
 	end
 end

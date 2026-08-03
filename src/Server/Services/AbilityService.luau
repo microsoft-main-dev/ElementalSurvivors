@@ -44,6 +44,10 @@ type Runtime = {
 	level: number,
 	timer: number,
 	phase: number,
+	damage: number, -- накопленный урон за забег, для HUD и экрана результатов
+	-- Когда этот враг последний раз получал урон именно от этой способности.
+	-- Нужно формам с постоянным контактом (Orbit), см. tickOrbit.
+	hitTimes: { [number]: number },
 }
 
 type Sim = {
@@ -61,6 +65,7 @@ type Sim = {
 	projLife: { number },
 	projHitRadius: { number },
 	projLastHit: { number },
+	projOwner: { Runtime? }, -- какой способности засчитывать урон снаряда
 	projAlive: { boolean },
 	projFree: { number },
 	projFreeCount: number,
@@ -112,29 +117,42 @@ local function sendFx(sim: Sim, kind: string, key: string, count: number): ()
 end
 
 --[[
-	Orbit — орбы вращаются вокруг игрока. Фаза крутится каждый тик, а урон
-	наносится по кулдауну: наносить каждый кадр означало бы, что урон зависит
-	от FPS сервера.
+	Orbit — орбы вращаются вокруг игрока и бьют то, чего касаются.
+
+	Изначально урон наносился раз в cooldown секунд по текущему положению орба,
+	и это было неправильно: за полсекунды орб проходит по дуге десяток стадов,
+	а радиус поражения у него три. Между замерами он телепортировался сквозь
+	толпу и попадал только по тем, кто случайно оказался под ним в момент замера.
+
+	Правильно так, как это устроено в жанре: контакт проверяется каждый кадр,
+	а cooldown становится задержкой ПОВТОРНОГО удара по тому же врагу.
+	Тогда орб реально косит всех, кого задевает, но не превращается
+	в бесконечный урон в упор.
 ]]
-local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Vector3, fired: boolean): ()
+local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Vector3, now: number): ()
 	local data = runtime.def.levels[runtime.level]
 	local count = data.count :: number
 	local radius = data.radius :: number
+	local hitRadius = data.hitRadius :: number
+	local repeatDelay = data.cooldown
+	local hitTimes = runtime.hitTimes
 
 	runtime.phase = (runtime.phase + (data.angularSpeed :: number) * dt) % (math.pi * 2)
-
-	if not fired then
-		return
-	end
 
 	local step = math.pi * 2 / count
 	for index = 0, count - 1 do
 		local angle = runtime.phase + step * index
 		local orb = playerLocal + Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
 
-		local hits = EnemyService.Collect(sim.slot, orb, data.hitRadius :: number, sim.hits)
+		local hits = EnemyService.CollectHits(sim.slot, orb, hitRadius, sim.hits)
 		for hitIndex = 1, hits do
-			EnemyService.Damage(sim.slot, sim.hits[hitIndex], data.damage)
+			local enemyId = sim.hits[hitIndex]
+			local last = hitTimes[enemyId]
+			if last == nil or now - last >= repeatDelay then
+				hitTimes[enemyId] = now
+				local _, dealt = EnemyService.Damage(sim.slot, enemyId, data.damage)
+				runtime.damage += dealt
+			end
 		end
 	end
 end
@@ -142,18 +160,20 @@ end
 -- Aura — постоянный круг вокруг игрока, урон по всем внутри по кулдауну.
 local function tickAura(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 	local data = runtime.def.levels[runtime.level]
-	local hits = EnemyService.Collect(sim.slot, playerLocal, data.radius :: number, sim.hits)
+	local hits = EnemyService.CollectHits(sim.slot, playerLocal, data.radius :: number, sim.hits)
 	for index = 1, hits do
-		EnemyService.Damage(sim.slot, sim.hits[index], data.damage)
+		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], data.damage)
+		runtime.damage += dealt
 	end
 end
 
 -- Nova — то же по геометрии, но разовая вспышка, и клиент рисует волну.
 local function tickNova(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 	local data = runtime.def.levels[runtime.level]
-	local hits = EnemyService.Collect(sim.slot, playerLocal, data.radius :: number, sim.hits)
+	local hits = EnemyService.CollectHits(sim.slot, playerLocal, data.radius :: number, sim.hits)
 	for index = 1, hits do
-		EnemyService.Damage(sim.slot, sim.hits[index], data.damage)
+		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], data.damage)
+		runtime.damage += dealt
 	end
 
 	sim.fxQueue[1] = { x = playerLocal.X, z = playerLocal.Z, dx = 0, dz = 0 }
@@ -211,6 +231,7 @@ local function fireProjectiles(sim: Sim, runtime: Runtime, playerLocal: Vector3)
 		sim.projLife[id] = data.lifetime :: number
 		sim.projHitRadius[id] = data.hitRadius :: number
 		sim.projLastHit[id] = 0
+		sim.projOwner[id] = runtime
 		sim.projAlive[id] = true
 
 		queued += 1
@@ -233,13 +254,17 @@ local function stepProjectiles(sim: Sim, dt: number): ()
 			local position = sim.projPosition[id] + sim.projDirection[id] * (sim.projSpeed[id] * dt)
 			sim.projPosition[id] = position
 
-			local hits = EnemyService.Collect(sim.slot, position, sim.projHitRadius[id], sim.hits)
+			local hits = EnemyService.CollectHits(sim.slot, position, sim.projHitRadius[id], sim.hits)
 			for index = 1, hits do
 				local enemyId = sim.hits[index]
 				-- Один враг за тик, и не тот же самый, что в прошлый: иначе снаряд
 				-- с pierce = 3 выжигал бы всю пробойность об одну цель.
 				if enemyId ~= sim.projLastHit[id] then
-					EnemyService.Damage(sim.slot, enemyId, sim.projDamage[id])
+					local _, dealt = EnemyService.Damage(sim.slot, enemyId, sim.projDamage[id])
+					local owner = sim.projOwner[id]
+					if owner then
+						owner.damage += dealt
+					end
 					sim.projLastHit[id] = enemyId
 
 					local pierce = sim.projPierce[id] - 1
@@ -260,8 +285,18 @@ function AbilityService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 		return
 	end
 
+	local now = os.clock()
+
 	for _, runtime in sim.abilities do
 		local data = runtime.def.levels[runtime.level]
+		local shape = runtime.def.shape
+
+		-- У Orbit нет «срабатывания»: он бьёт постоянным контактом,
+		-- поэтому кулдаун у него означает совсем другое (см. tickOrbit).
+		if shape == "Orbit" then
+			tickOrbit(sim, runtime, dt, playerLocal, now)
+			continue
+		end
 
 		runtime.timer -= dt
 		local fired = runtime.timer <= 0
@@ -269,10 +304,7 @@ function AbilityService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 			runtime.timer += data.cooldown
 		end
 
-		local shape = runtime.def.shape
-		if shape == "Orbit" then
-			tickOrbit(sim, runtime, dt, playerLocal, fired)
-		elseif fired then
+		if fired then
 			if shape == "Aura" then
 				tickAura(sim, runtime, playerLocal)
 			elseif shape == "Nova" then
@@ -300,7 +332,14 @@ function AbilityService.Grant(slot: number, key: string): boolean
 		return false
 	end
 
-	local runtime: Runtime = { def = def, level = 1, timer = def.levels[1].cooldown, phase = 0 }
+	local runtime: Runtime = {
+		def = def,
+		level = 1,
+		timer = def.levels[1].cooldown,
+		phase = 0,
+		damage = 0,
+		hitTimes = {},
+	}
 	table.insert(sim.abilities, runtime)
 	sim.byKey[key] = runtime
 	return true
@@ -329,12 +368,16 @@ function AbilityService.GetViews(slot: number): { AbilityView }
 
 	local views: { AbilityView } = table.create(#sim.abilities)
 	for index, runtime in sim.abilities do
+		-- У Orbit кулдаун не показываем: он не «перезаряжается», а бьёт постоянно,
+		-- и затемнение иконки означало бы неправду.
+		local isOrbit = runtime.def.shape == "Orbit"
 		views[index] = {
 			key = runtime.def.key,
 			level = runtime.level,
-			cooldown = math.max(runtime.timer, 0),
-			maxCooldown = runtime.def.levels[runtime.level].cooldown,
+			cooldown = if isOrbit then 0 else math.max(runtime.timer, 0),
+			maxCooldown = if isOrbit then 0 else runtime.def.levels[runtime.level].cooldown,
 			phase = runtime.phase,
+			damage = math.floor(runtime.damage),
 		}
 	end
 	return views
@@ -372,6 +415,7 @@ function AbilityService.StartRun(slot: number, player: Player, starterKey: strin
 		projLife = table.create(CAPACITY, 0),
 		projHitRadius = table.create(CAPACITY, 0),
 		projLastHit = table.create(CAPACITY, 0),
+		projOwner = table.create(CAPACITY, nil :: Runtime?),
 		projAlive = table.create(CAPACITY, false),
 		projFree = table.create(CAPACITY, 0),
 		projFreeCount = CAPACITY,

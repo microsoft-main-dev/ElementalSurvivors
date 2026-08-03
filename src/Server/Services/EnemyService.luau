@@ -573,16 +573,20 @@ function EnemyService.SetDeathHandler(handler: (slot: number, player: Player, po
 	deathHandler = handler
 end
 
-function EnemyService.Damage(slot: number, id: number, amount: number): boolean
+-- Возвращает «убит ли» и сколько урона реально прошло (для счётчика по способностям).
+function EnemyService.Damage(slot: number, id: number, amount: number): (boolean, number)
 	local sim = sims[slot]
 	if not sim or not sim.alive[id] then
-		return false
+		return false, 0
 	end
 
-	local remaining = sim.hp[id] - amount
+	local health = sim.hp[id]
+	local dealt = math.min(amount, health)
+
+	local remaining = health - amount
 	if remaining > 0 then
 		sim.hp[id] = remaining
-		return false
+		return false, dealt
 	end
 
 	local position = sim.positions[id]
@@ -596,7 +600,44 @@ function EnemyService.Damage(slot: number, id: number, amount: number): boolean
 		handler(slot, sim.player, position, def.stats.xp)
 	end
 
-	return true
+	return true, dealt
+end
+
+--[[
+	Враги в радиусе с учётом их собственного размера.
+
+	Collect сравнивает расстояние между центрами, и для поиска соседей этого
+	достаточно. Но для попадания способности это неверно: крупный враг радиусом
+	два стада не получал урона, если его центр был чуть дальше радиуса удара,
+	хотя визуально способность проходила прямо сквозь него. Здесь к радиусу
+	добавляется радиус конкретного врага.
+]]
+function EnemyService.CollectHits(slot: number, position: Vector3, radius: number, out: { number }): number
+	local sim = sims[slot]
+	if not sim then
+		return 0
+	end
+
+	local candidates = sim.neighbours
+	local found = sim.hash.Collect(position, radius + maxEnemyRadius, candidates)
+
+	local count = 0
+	for index = 1, found do
+		local id = candidates[index]
+		if sim.alive[id] then
+			local def = Enemies.List[sim.typeId[id]]
+			local reach = radius + def.stats.radius
+			local candidate = sim.positions[id]
+			local dx = candidate.X - position.X
+			local dz = candidate.Z - position.Z
+			if dx * dx + dz * dz <= reach * reach then
+				count += 1
+				out[count] = id
+			end
+		end
+	end
+
+	return count
 end
 
 --[[
