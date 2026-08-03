@@ -1,18 +1,14 @@
 --!strict
 --[[
-	ArenaController — всё клиентское окружение боя.
+	ArenaController — клиентское окружение боя.
 
-	1. Декор арены. Строится здесь, а не на сервере, по seed из RunStarted:
-	   RNG детерминирован, поэтому картинка получается «настоящей», но при этом
-	   ни один из полусотни партов не реплицируется и не висит в чужих аренах.
-
-	2. Палитра и туман. Lighting в Roblox один на весь сервер, поэтому «своя
+	1. Палитра и туман. Lighting в Roblox один на весь сервер, поэтому «своя
 	   палитра у каждой локации» (раздел 5.1 ТЗ) через сервер невозможна:
 	   на одном сервере до восьми игроков на разных аренах. Зато изменения
 	   Lighting, сделанные локальным скриптом, не реплицируются — значит
 	   палитру каждый клиент ставит себе сам. Это и делается здесь.
 
-	3. Кольцо автоатаки — единственная боевая обратная связь в M1.
+	2. Кольцо автоатаки — единственная боевая обратная связь в M1.
 ]]
 
 local Lighting = game:GetService("Lighting")
@@ -25,7 +21,6 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
-local RNG = require(Shared.Util.RNG)
 
 local PULSE_TIME = 0.28
 
@@ -33,7 +28,6 @@ local ArenaController = {}
 
 local player = Players.LocalPlayer
 
-local decorFolder: Folder? = nil
 local pulsePart: Part? = nil
 local pulseStartedAt = -1
 local pulseRadius = 0
@@ -75,53 +69,15 @@ local function applyArenaLighting(): ()
 end
 
 --[[
-	Декор из примитивов по seed (раздел 5 ТЗ).
+	Декор арены строит ArenaService на сервере, а не этот контроллер.
 
-	Декор намеренно ПЛОСКИЙ — плиты и полосы на полу высотой меньше стада.
-	Сплошных колонн здесь не будет: враги считаются чистой математикой без поиска
-	пути, поэтому непроходимая колонна остановила бы игрока, а толпа прошла бы
-	сквозь неё насквозь и окружила его — это ловушка, а не укрытие.
-	Плоский декор решает ту же задачу (арены по seed отличаются друг от друга)
-	и при этом не обещает того, чего не делает.
-
-	Если когда-нибудь понадобятся именно препятствия — это отдельная задача:
-	они должны строиться на сервере и учитываться в движении врагов.
+	Изначально колонны были клиентскими — так они не реплицировались.
+	Но колонна, сквозь которую можно пройти, — это ложное обещание, а настоящая
+	коллизия обязана быть серверной: физику игрока проверяет сервер.
+	Заодно врагам нужно знать, что колонны существуют, чтобы их обходить,
+	поэтому расстановка живёт в Shared/Util/ArenaLayout и по seed одинакова
+	у сервера и у клиента.
 ]]
-local function buildDecor(origin: Vector3, seed: number): ()
-	local folder = Instance.new("Folder")
-	folder.Name = "ArenaDecor"
-	folder.Parent = Workspace
-
-	local rng = RNG.new(seed)
-	local half = Balance.Arena.size * 0.5 - 12
-
-	for index = 1, Balance.Arena.decorCount do
-		local x = rng.NextNumber(-half, half)
-		local z = rng.NextNumber(-half, half)
-
-		local isAccent = rng.NextNumber(0, 1) > 0.82
-		local length = rng.NextNumber(10, 34)
-		local width = if isAccent then rng.NextNumber(1.2, 2.4) else rng.NextNumber(6, 20)
-		local height = rng.NextNumber(0.2, 0.5)
-
-		local part = Instance.new("Part")
-		part.Name = `Decor{index}`
-		part.Size = Vector3.new(length, height, width)
-		part.CFrame = CFrame.new(origin + Vector3.new(x, height * 0.5, z)) * CFrame.Angles(0, rng.NextAngle(), 0)
-		part.Color = if isAccent then Palette.Arena.decorAccent else Palette.Arena.decor
-		part.Material = if isAccent then Enum.Material.Neon else Enum.Material.SmoothPlastic
-		part.Anchored = true
-		part.CanCollide = false
-		part.CanQuery = false
-		part.CanTouch = false
-		part.CastShadow = false
-		part.TopSurface = Enum.SurfaceType.Smooth
-		part.BottomSurface = Enum.SurfaceType.Smooth
-		part.Parent = folder
-	end
-
-	decorFolder = folder
-end
 
 local function getPulsePart(): Part
 	local part = pulsePart
@@ -177,22 +133,15 @@ local function updatePulse(): ()
 	part.Transparency = 0.35 + 0.65 * progress
 end
 
-local function onRunStarted(slot: number, seed: number): ()
+local function onRunStarted(_slot: number, _seed: number): ()
 	if not lobbySnapshot then
 		lobbySnapshot = snapshotLighting()
 	end
 
 	applyArenaLighting()
-	buildDecor(Vector3.new(slot * Balance.Arena.spacing, 0, 0), seed)
 end
 
 local function onRunEnded(_reason: string): ()
-	local folder = decorFolder
-	if folder then
-		folder:Destroy()
-		decorFolder = nil
-	end
-
 	local snapshot = lobbySnapshot
 	if snapshot then
 		restoreLighting(snapshot)

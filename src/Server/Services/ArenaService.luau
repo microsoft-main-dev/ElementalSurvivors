@@ -27,6 +27,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local ArenaLayout = require(Shared.Util.ArenaLayout)
 local Balance = require(Shared.Config.Balance)
 local Palette = require(Shared.Config.Palette)
 
@@ -113,6 +114,40 @@ local function buildArena(slot: Slot): ()
 		wall.CanCollide = true
 		wall.CanQuery = false
 		wall.CanTouch = false
+	end
+
+	--[[
+		Колонны. Строятся на сервере, потому что это настоящие препятствия
+		с коллизией, а физика игрока проверяется сервером. Расстановка берётся
+		из ArenaLayout по seed — тот же самый набор получают EnemyService
+		и клиентская симуляция, поэтому враги обходят ровно то, что видно.
+	]]
+	for index, obstacle in ArenaLayout.Generate(slot.seed) do
+		local pillar = makePart(
+			`Pillar{index}`,
+			obstacle.size,
+			origin + obstacle.position + Vector3.new(0, obstacle.size.Y * 0.5, 0),
+			Palette.Arena.decor,
+			folder
+		)
+		pillar.CFrame = CFrame.new(pillar.Position) * CFrame.Angles(0, obstacle.angle, 0)
+		pillar.CanCollide = true
+		pillar.CastShadow = false
+
+		-- Неоновая полоса у основания: силуэт читается даже в тумане.
+		local base = makePart(
+			`PillarBase{index}`,
+			Vector3.new(obstacle.size.X + 1.6, 0.5, obstacle.size.Z + 1.6),
+			origin + obstacle.position + Vector3.new(0, 0.25, 0),
+			Palette.Arena.decorAccent,
+			folder
+		)
+		base.CFrame = CFrame.new(base.Position) * CFrame.Angles(0, obstacle.angle, 0)
+		base.Material = Enum.Material.Neon
+		base.CanCollide = false
+		base.CanQuery = false
+		base.CanTouch = false
+		base.CastShadow = false
 	end
 
 	-- Площадка выхода: единственный способ покинуть арену живым.

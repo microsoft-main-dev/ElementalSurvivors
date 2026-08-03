@@ -92,6 +92,49 @@ function EnemyMotion.Separation(
 end
 
 --[[
+	Выталкивание из колонн арены.
+
+	Поиска пути у врагов нет и не будет — при сотнях врагов он неподъёмен.
+	Вместо него: враг идёт к игроку по прямой, а если оказался внутри круга
+	колонны, его выносит на её границу. Поскольку преследование продолжает
+	тянуть его вперёд, враг соскальзывает вдоль колонны и обходит её.
+	Выглядит естественно и стоит один корень на пересечение.
+
+	obstacleIds/positions/radii — как у SpatialHash.Collect: массив индексов
+	и общие массивы данных препятствий.
+]]
+function EnemyMotion.PushOutOfObstacles(
+	position: Vector3,
+	obstacleIds: { number },
+	obstaclePositions: { [number]: Vector3 },
+	obstacleRadii: { [number]: number },
+	count: number,
+	bodyRadius: number
+): Vector3
+	for index = 1, count do
+		local id = obstacleIds[index]
+		local center = obstaclePositions[id]
+		local minimum = obstacleRadii[id] + bodyRadius
+
+		local dx = position.X - center.X
+		local dz = position.Z - center.Z
+		local distanceSquared = dx * dx + dz * dz
+
+		if distanceSquared < minimum * minimum then
+			if distanceSquared < 1e-6 then
+				-- Ровно в центре колонны: выносим в произвольную, но фиксированную сторону.
+				position = Vector3.new(center.X + minimum, 0, center.Z)
+			else
+				local scale = minimum / math.sqrt(distanceSquared)
+				position = Vector3.new(center.X + dx * scale, 0, center.Z + dz * scale)
+			end
+		end
+	end
+
+	return position
+end
+
+--[[
 	Покачивание вместо скелетной анимации (раздел 2.1 ТЗ).
 	phase разводит врагов по фазе, чтобы толпа не пульсировала синхронно.
 ]]

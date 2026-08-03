@@ -28,6 +28,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local ArenaLayout = require(Shared.Util.ArenaLayout)
 local Balance = require(Shared.Config.Balance)
 local Enemies = require(Shared.Config.Enemies)
 local EnemyMotion = require(Shared.Util.EnemyMotion)
@@ -67,6 +68,13 @@ local container: Folder? = nil
 local partPool: Pool.Pool<Part>? = nil
 local hash = SpatialHash.new(Balance.Combat.cellSize)
 local neighbours: { number } = {}
+
+-- Колонны арены: тот же набор, что у сервера, из того же seed.
+local obstacleHash = SpatialHash.new(Balance.Combat.cellSize * 2)
+local obstaclePositions: { Vector3 } = {}
+local obstacleRadii: { number } = {}
+local obstacleQueryRadius = 0
+local obstacleHits: { number } = {}
 
 -- Переиспользуемые массивы для BulkMoveTo и разбора пакетов.
 local moveParts: { BasePart } = {}
@@ -240,6 +248,20 @@ local function simulate(dt: number, playerLocal: Vector3): ()
 				dt
 			)
 
+			if obstacleQueryRadius > 0 then
+				local hits = obstacleHash.Collect(position, obstacleQueryRadius + def.stats.radius, obstacleHits)
+				if hits > 0 then
+					position = EnemyMotion.PushOutOfObstacles(
+						position,
+						obstacleHits,
+						obstaclePositions,
+						obstacleRadii,
+						hits,
+						def.stats.radius
+					)
+				end
+			end
+
 			positions[id] = EnemyMotion.ClampToArena(position, arenaSize)
 
 			local offset = offsets[id]
@@ -318,9 +340,28 @@ local function onHeartbeat(deltaTime: number): ()
 	end
 end
 
-local function onRunStarted(slot: number, _seed: number): ()
+local function buildObstacles(seed: number): ()
+	table.clear(obstaclePositions)
+	table.clear(obstacleRadii)
+	obstacleQueryRadius = 0
+
+	local occupied: { boolean } = {}
+	local layout = ArenaLayout.Generate(seed)
+
+	for index, obstacle in layout do
+		obstaclePositions[index] = obstacle.position
+		obstacleRadii[index] = obstacle.radius
+		occupied[index] = true
+		obstacleQueryRadius = math.max(obstacleQueryRadius, obstacle.radius)
+	end
+
+	obstacleHash.Rebuild(obstaclePositions, occupied, #layout)
+end
+
+local function onRunStarted(slot: number, seed: number): ()
 	clearAll()
 	origin = Vector3.new(slot * Balance.Arena.spacing, 0, 0)
+	buildObstacles(seed)
 
 	local folder = Instance.new("Folder")
 	folder.Name = "Enemies"

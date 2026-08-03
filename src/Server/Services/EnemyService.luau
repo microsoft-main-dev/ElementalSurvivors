@@ -32,6 +32,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local ArenaLayout = require(Shared.Util.ArenaLayout)
 local Balance = require(Shared.Config.Balance)
 local Enemies = require(Shared.Config.Enemies)
 local EnemyMotion = require(Shared.Util.EnemyMotion)
@@ -86,8 +87,16 @@ type Sim = {
 	resyncCredit: number,
 	resyncIds: { number },
 
-	-- Переиспользуемый буфер под запросы к хешу
+	-- Колонны арены: статичные круги, из которых врагов выталкивает.
+	-- Хеш строится один раз при старте забега — препятствия не двигаются.
+	obstacleHash: SpatialHash.SpatialHash,
+	obstaclePositions: { Vector3 },
+	obstacleRadii: { number },
+	obstacleQueryRadius: number,
+
+	-- Переиспользуемые буферы под запросы к хешам
 	neighbours: { number },
+	obstacleHits: { number },
 }
 
 local EnemyService = {}
@@ -241,6 +250,21 @@ local function moveStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 				separationStrength,
 				dt
 			)
+
+			if sim.obstacleQueryRadius > 0 then
+				local hits =
+					sim.obstacleHash.Collect(position, sim.obstacleQueryRadius + def.stats.radius, sim.obstacleHits)
+				if hits > 0 then
+					position = EnemyMotion.PushOutOfObstacles(
+						position,
+						sim.obstacleHits,
+						sim.obstaclePositions,
+						sim.obstacleRadii,
+						hits,
+						def.stats.radius
+					)
+				end
+			end
 
 			nextPositions[id] = EnemyMotion.ClampToArena(position, arenaSize)
 		end
@@ -439,7 +463,36 @@ function EnemyService.SetContactHandler(handler: (player: Player, damage: number
 	contactHandler = handler
 end
 
+--[[
+	Готовит статичные препятствия арены: позиции, радиусы и хеш по ним.
+	Расстановка берётся из того же ArenaLayout, из которого сервер построил
+	колонны, а клиент — свою копию для симуляции.
+]]
+local function buildObstacles(seed: number): (SpatialHash.SpatialHash, { Vector3 }, { number }, number)
+	local layout = ArenaLayout.Generate(seed)
+
+	local positions: { Vector3 } = {}
+	local radii: { number } = {}
+	local occupied: { boolean } = {}
+	local maxRadius = 0
+
+	for index, obstacle in layout do
+		positions[index] = obstacle.position
+		radii[index] = obstacle.radius
+		occupied[index] = true
+		maxRadius = math.max(maxRadius, obstacle.radius)
+	end
+
+	-- Ячейка крупнее боевой: препятствий мало и они большие.
+	local hash = SpatialHash.new(Balance.Combat.cellSize * 2)
+	hash.Rebuild(positions, occupied, #layout)
+
+	return hash, positions, radii, maxRadius
+end
+
 function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, seed: number): ()
+	local obstacleHash, obstaclePositions, obstacleRadii, obstacleQueryRadius = buildObstacles(seed)
+
 	local sim: Sim = {
 		slot = slot,
 		player = player,
@@ -477,7 +530,13 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		resyncCredit = 0,
 		resyncIds = {},
 
+		obstacleHash = obstacleHash,
+		obstaclePositions = obstaclePositions,
+		obstacleRadii = obstacleRadii,
+		obstacleQueryRadius = obstacleQueryRadius,
+
 		neighbours = {},
+		obstacleHits = {},
 	}
 
 	-- Free-list заполняем в обратном порядке, чтобы id выдавались с единицы:
