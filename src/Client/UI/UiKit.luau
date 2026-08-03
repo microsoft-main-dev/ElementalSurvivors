@@ -20,10 +20,19 @@ UiKit.ButtonHeight = 48 -- не меньше 44 пикселей
 UiKit.RowHeight = 64
 UiKit.Corner = 10
 
+--[[
+	Скругление. Существующий UICorner переиспользуется, а не добавляется второй:
+	Roblox применяет только первый найденный, поэтому «скруглить сильнее» уже
+	скруглённую кнопку иначе не получилось бы — второй объект молча
+	не действовал бы, и круглые узлы дерева остались бы прямоугольниками.
+]]
 function UiKit.Corners(instance: GuiObject, radius: number?): ()
-	local corner = Instance.new("UICorner")
+	local corner = instance:FindFirstChildOfClass("UICorner")
+	if not corner then
+		corner = Instance.new("UICorner")
+		corner.Parent = instance
+	end
 	corner.CornerRadius = UDim.new(0, radius or UiKit.Corner)
-	corner.Parent = instance
 end
 
 function UiKit.Padding(instance: GuiObject, amount: number): ()

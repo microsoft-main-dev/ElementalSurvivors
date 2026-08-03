@@ -186,16 +186,20 @@ export type PetInstance = {
 }
 
 --[[
-	Всё, что питомец даёт забегу. Собирается один раз при входе в бой:
-	пересчитывать его в цикле боя незачем, поменяться он не может.
+	Всё, что забег получает извне: питомец (раздел 6 ТЗ) и таланты (M5).
+
+	Собирается один раз при входе в бой и за забег не меняется — ни питомца,
+	ни дерево в бою не тронуть. Источников бонусов будет больше (экипировка —
+	M6), и все они дописываются в эти же поля, а не заводят второй путь.
 ]]
-export type PetLoadout = {
+export type RunLoadout = {
 	petId: string, -- пустая строка означает «питомца нет»
 	starterAbility: string,
 	maxHealth: number,
 	walkSpeed: number,
 	magnetRadius: number,
 	elementDamage: { [Element]: number }, -- множитель урона, 1 = без бонуса
+	elementCooldown: { [Element]: number }, -- множитель кулдауна, меньше 1 = чаще
 }
 
 -- Строка списка питомцев на клиенте. Все числа уже посчитаны сервером.
@@ -235,10 +239,71 @@ export type OfflineReport = {
 }
 
 --[[
+	Древо талантов (раздел 6 ТЗ), M5.
+
+	Узел — это данные: где он нарисован, с кем соединён, сколько очков в него
+	влезает и что он даёт. Логика рисования и применения написана один раз
+	и про конкретные узлы не знает ничего.
+
+	Стихийные эффекты усиливают всю стихию целиком, а не отдельную
+	способность: так талант остаётся осмысленным независимо от того,
+	какие карточки легли в забеге.
+]]
+export type TalentEffectKind =
+	"ElementDamage" -- +perPoint к множителю урона стихии
+	| "ElementCooldown" -- -perPoint к множителю кулдауна стихии
+	| "MaxHealth" -- +perPoint к максимуму здоровья
+	| "WalkSpeed" -- +perPoint к скорости
+	| "MagnetRadius" -- +perPoint к радиусу притяжения кристаллов
+
+export type TalentEffect = {
+	kind: TalentEffectKind,
+	perPoint: number,
+}
+
+export type TalentNode = {
+	id: string,
+	displayName: string,
+	element: Element?, -- nil у общих узлов
+	position: Vector2, -- в условных единицах дерева, масштаб задаёт панель
+	connections: { string }, -- связи двусторонние, обратные достраиваются при загрузке
+	maxPoints: number,
+	effect: TalentEffect,
+}
+
+-- Свёрнутое дерево: то, во что превращаются вложенные очки.
+export type TalentBonuses = {
+	elementDamage: { [Element]: number },
+	elementCooldown: { [Element]: number },
+	maxHealth: number,
+	walkSpeed: number,
+	magnetRadius: number,
+	spent: number, -- сколько очков вложено всего; от него считается цена сброса
+}
+
+export type TalentsView = {
+	level: number,
+	xp: number, -- опыт внутри текущего уровня
+	xpToNext: number, -- 0 на максимальном уровне
+	points: number, -- нераспределённые очки
+	spent: { [string]: number }, -- id узла -> вложено
+	resetCost: number,
+	bonuses: TalentBonuses,
+}
+
+--[[
 	Действия, которые игрок может запросить в лобби. Строка приходит с клиента,
 	поэтому список закрытый: всё, чего здесь нет, отбрасывается на входе.
 ]]
-export type LobbyAction = "BuyEgg" | "EquipPet" | "UpgradePet" | "BuyLot" | "ClaimOffline" | "Refresh"
+export type LobbyAction =
+	"BuyEgg"
+	| "EquipPet"
+	| "UpgradePet"
+	| "BuyLot"
+	| "ClaimOffline"
+	| "SpendTalent"
+	| "ResetTalents"
+	| "Refresh"
 
 --[[
 	Профиль игрока (раздел 6 ТЗ).
@@ -356,11 +421,17 @@ export type RunResult = {
 	reason: RunEndReason,
 	time: number,
 	kills: number,
-	level: number,
+	level: number, -- уровень внутри забега, он не сохраняется
 	abilities: { AbilityView },
 	essence: number, -- начислено за этот забег
 	newBest: boolean, -- время забега стало рекордом
 	currency: Currency, -- баланс уже после начисления
+
+	-- Мета-прогрессия (M5): опыт персонажа, который забег НЕ сбрасывает.
+	xp: number, -- начислено за этот забег
+	metaLevel: number, -- уровень персонажа после начисления
+	levelsGained: number, -- сколько уровней взято за этот забег
+	talentPoints: number, -- нераспределённых очков после начисления
 }
 
 -- Причина исчезновения врага; уходит на клиент одним байтом.

@@ -31,7 +31,7 @@ local Pets = require(Shared.Config.Pets)
 local Types = require(Shared.Types)
 
 type PetInstance = Types.PetInstance
-type PetLoadout = Types.PetLoadout
+type RunLoadout = Types.RunLoadout
 
 local STARTER_FLAG = "starterPet"
 
@@ -45,7 +45,7 @@ local viewRemote: RemoteEvent? = nil
 	только если коллекция пуста, а такого после выдачи стартового питомца
 	не бывает.
 ]]
-local function emptyLoadout(): PetLoadout
+local function emptyLoadout(): RunLoadout
 	return {
 		petId = "",
 		starterAbility = Balance.Progression.starterAbility,
@@ -53,6 +53,7 @@ local function emptyLoadout(): PetLoadout
 		walkSpeed = Balance.Combat.playerWalkSpeed,
 		magnetRadius = Balance.Pickup.magnetRadius,
 		elementDamage = {},
+		elementCooldown = {},
 	}
 end
 
@@ -70,13 +71,16 @@ local function findPet(player: Player, uid: string): PetInstance?
 end
 
 --[[
-	Всё, что питомец даёт забегу.
+	Базовый лоадаут забега: характеристики персонажа плюс всё, что даёт питомец.
+
+	Дальше поверх него ложатся таланты (TalentService.Apply), а в M6 — экипировка.
+	Порядок сборки задаёт CombatService: здесь только питомец.
 
 	Считается на входе в бой и больше не пересчитывается: поменять питомца
 	в бою нельзя, а кеш пришлось бы сбрасывать при каждой покупке и улучшении —
 	лишний повод однажды забыть его сбросить и выдать игроку чужие бонусы.
 ]]
-function PetService.GetLoadout(player: Player): PetLoadout
+function PetService.GetLoadout(player: Player): RunLoadout
 	local data = DataService.GetProfile(player)
 	if not data then
 		return emptyLoadout()

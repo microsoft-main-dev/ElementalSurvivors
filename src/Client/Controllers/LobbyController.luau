@@ -34,6 +34,7 @@ local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
 local PetsPanel = require(script.Parent.Parent.UI.PetsPanel)
 local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
+local TalentsPanel = require(script.Parent.Parent.UI.TalentsPanel)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.Parent.UI.UiKit)
 
@@ -49,10 +50,12 @@ local barGui: ScreenGui? = nil
 local petsPanel: PetsPanel.Panel? = nil
 local eggsPanel: EggsPanel.Panel? = nil
 local shopPanel: ShopPanel.Panel? = nil
+local talentsPanel: TalentsPanel.Panel? = nil
 local offlinePanel: OfflinePanel.Panel? = nil
 
 local profileView: Types.ProfileView? = nil
 local petsView: Types.PetsView? = nil
+local talentsView: Types.TalentsView? = nil
 
 local petModel: BasePart? = nil
 local petSpin = 0
@@ -102,6 +105,11 @@ local function refreshPanels(): ()
 		local uid, name = equippedInfo()
 		shop.Refresh(essence, prisms, uid, name)
 	end
+
+	local talents = talentsPanel
+	if talents then
+		talents.Refresh(talentsView, essence)
+	end
 end
 
 local function closeAll(): ()
@@ -116,6 +124,10 @@ local function closeAll(): ()
 	local shop = shopPanel
 	if shop then
 		shop.Close()
+	end
+	local talents = talentsPanel
+	if talents then
+		talents.Close()
 	end
 	local offline = offlinePanel
 	if offline then
@@ -145,6 +157,11 @@ local function openPanel(name: string, target: string?): ()
 		local shop = shopPanel
 		if shop then
 			shop.Open()
+		end
+	elseif name == "Talents" then
+		local talents = talentsPanel
+		if talents then
+			talents.Open()
 		end
 	end
 end
@@ -236,7 +253,7 @@ local function buildBar(): ()
 	local holder = UiKit.Frame(gui, "Holder")
 	holder.AnchorPoint = Vector2.new(0.5, 1)
 	holder.Position = UDim2.new(0.5, 0, 1, -14)
-	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 3 + BUTTON_GAP * 2, UiKit.ButtonHeight)
+	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 4 + BUTTON_GAP * 3, UiKit.ButtonHeight)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
@@ -246,14 +263,14 @@ local function buildBar(): ()
 	layout.Parent = holder
 
 	--[[
-		Три кнопки — ровно те системы, которые в M4 существуют. Таланты (M5)
-		и квесты (M6) появятся здесь вместе с собой: кнопка, открывающая
-		пустое окно, хуже отсутствующей.
+		Ровно те системы, которые существуют. Квесты (M6) появятся здесь
+		вместе с собой: кнопка, открывающая пустое окно, хуже отсутствующей.
 	]]
 	local buttons: { { name: string, text: string } } = {
 		{ name = "Pets", text = "Pets" },
 		{ name = "Eggs", text = "Eggs" },
 		{ name = "Shop", text = "Shop" },
+		{ name = "Talents", text = "Talents" },
 	}
 
 	for order, entry in buttons do
@@ -291,6 +308,7 @@ function LobbyController.Start(): ()
 	petsPanel = PetsPanel.Build(playerGui, send)
 	eggsPanel = EggsPanel.Build(playerGui, send)
 	shopPanel = ShopPanel.Build(playerGui, send)
+	talentsPanel = TalentsPanel.Build(playerGui, send)
 	offlinePanel = OfflinePanel.Build(playerGui, send)
 
 	--[[
@@ -320,6 +338,11 @@ function LobbyController.Start(): ()
 		petsView = view
 		refreshPanels()
 		updatePetModel()
+	end)
+
+	Net.GetEvent(Net.Id.TalentsView).OnClientEvent:Connect(function(view: Types.TalentsView)
+		talentsView = view
+		refreshPanels()
 	end)
 
 	Net.GetEvent(Net.Id.EggResult).OnClientEvent:Connect(function(results: { Types.EggRollResult })

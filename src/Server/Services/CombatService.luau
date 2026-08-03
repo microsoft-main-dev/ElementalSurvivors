@@ -36,6 +36,7 @@ local PetService = require(script.Parent.PetService)
 local PickupService = require(script.Parent.PickupService)
 local ProgressionService = require(script.Parent.ProgressionService)
 local RewardService = require(script.Parent.RewardService)
+local TalentService = require(script.Parent.TalentService)
 local Types = require(Shared.Types)
 
 export type RunStats = {
@@ -73,6 +74,34 @@ local function notify(player: Player, message: string): ()
 	local remote = notifyRemote
 	if remote then
 		remote:FireClient(player, message)
+	end
+end
+
+--[[
+	Печать собранного лоадаута в Output (Balance.Debug.printLoadout).
+
+	Нужна для критерия приёмки M5: «вложенное очко таланта измеримо меняет урон
+	стихии». По экрану результатов это не проверить — урон за забег скачет
+	от того, как легли карточки, и разница в пятнадцать процентов тонет
+	в этом разбросе. Здесь же видны сами множители, до боя.
+]]
+local function logLoadout(player: Player, loadout: Types.RunLoadout): ()
+	if not Balance.Debug.printLoadout then
+		return
+	end
+
+	local petName = if loadout.petId ~= "" then loadout.petId else "нет питомца"
+	print(
+		`[CombatService] Лоадаут {player.Name}: {petName}, старт {loadout.starterAbility}, `
+			.. `HP {math.floor(loadout.maxHealth)}, скорость {string.format("%.1f", loadout.walkSpeed)}, `
+			.. `магнит {string.format("%.1f", loadout.magnetRadius)}`
+	)
+
+	for element, multiplier in loadout.elementDamage do
+		print(`    урон {element}: x{string.format("%.3f", multiplier)}`)
+	end
+	for element, multiplier in loadout.elementCooldown do
+		print(`    кулдаун {element}: x{string.format("%.3f", multiplier)}`)
 	end
 end
 
@@ -292,12 +321,18 @@ function CombatService.BeginRun(player: Player): boolean
 	end
 
 	--[[
-		Характеристики забега = база плюс бонусы питомца (разделы 5 и 6 ТЗ).
-		Лоадаут снимается ровно здесь и на весь забег: сменить питомца в бою
-		нельзя, а пересчёт в цикле означал бы, что покупка в лобби чужого
-		сервера могла бы изменить идущий бой.
+		Характеристики забега = база, затем питомец, затем таланты
+		(разделы 5 и 6 ТЗ). Порядок сборки задан здесь и только здесь,
+		чтобы источников бонусов можно было добавлять сколько угодно
+		(экипировка — M6), не заводя каждому свой путь до боя.
+
+		Лоадаут снимается ровно в этот момент и на весь забег: ни питомца,
+		ни дерево в бою не сменить, а пересчёт в цикле означал бы, что
+		действие в лобби способно изменить идущий бой.
 	]]
 	local loadout = PetService.GetLoadout(player)
+	TalentService.Apply(player, loadout)
+	logLoadout(player, loadout)
 
 	humanoid.MaxHealth = loadout.maxHealth
 	humanoid.Health = loadout.maxHealth

@@ -20,6 +20,20 @@ local Rewards = {
 		perKill = 1, -- за каждого убитого врага
 		perMinute = 20, -- за каждую минуту, прожитую на арене
 	}),
+
+	--[[
+		Опыт персонажа (раздел 6 ТЗ), M5. Считается так же, как валюта, —
+		по убийствам и времени: это и есть формула бесконечного режима.
+		Фиксированная выдача за сюжетный этап появится в M6 вместе с этапами.
+
+		Числа подобраны так, чтобы забег на десять минут давал несколько
+		уровней в начале и заметно меньше ближе к сотому: кривая уровня
+		растёт, а выдача за забег — нет.
+	]]
+	Xp = table.freeze({
+		perKill = 0.02,
+		perMinute = 25,
+	}),
 }
 
 --[[
@@ -31,6 +45,17 @@ local Rewards = {
 function Rewards.EssenceForRun(kills: number, time: number): number
 	local essence = kills * Rewards.Essence.perKill + (time / 60) * Rewards.Essence.perMinute
 	return math.floor(essence)
+end
+
+--[[
+	Сколько опыта персонажа начислить за забег.
+
+	Нижней границы нет по той же причине, что и у валюты: она превратилась бы
+	в фарм заходом-выходом через портал.
+]]
+function Rewards.XpForRun(kills: number, time: number): number
+	local xp = kills * Rewards.Xp.perKill + (time / 60) * Rewards.Xp.perMinute
+	return math.floor(xp)
 end
 
 return table.freeze(Rewards)

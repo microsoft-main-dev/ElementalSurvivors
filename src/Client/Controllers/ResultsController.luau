@@ -33,6 +33,7 @@ local screen: ScreenGui? = nil
 local titleLabel: TextLabel? = nil
 local summaryLabel: TextLabel? = nil
 local rewardLabel: TextLabel? = nil
+local metaLabel: TextLabel? = nil
 local bestBadge: TextLabel? = nil
 local damageList: ScrollingFrame? = nil
 
@@ -148,10 +149,22 @@ local function build(): ()
 	reward.Size = UDim2.fromScale(0.9, 0.08)
 	rewardLabel = reward
 
+	--[[
+		Мета-прогрессия (M5). Стоит отдельной строкой под наградой намеренно:
+		валюта и опыт персонажа — разные вещи, и внутрибоевой уровень выше
+		по экрану к опыту персонажа отношения не имеет вовсе.
+	]]
+	local meta = makeLabel(panel, Enum.Font.Gotham, Palette.UI.subtext)
+	meta.Name = "Meta"
+	meta.AnchorPoint = Vector2.new(0.5, 0)
+	meta.Position = UDim2.fromScale(0.5, 0.775)
+	meta.Size = UDim2.fromScale(0.9, 0.05)
+	metaLabel = meta
+
 	local badge = makeLabel(panel, Enum.Font.GothamBold, Palette.Element.Lightning)
 	badge.Name = "BestBadge"
 	badge.AnchorPoint = Vector2.new(0.5, 0)
-	badge.Position = UDim2.fromScale(0.5, 0.78)
+	badge.Position = UDim2.fromScale(0.5, 0.83)
 	badge.Size = UDim2.fromScale(0.9, 0.05)
 	badge.Text = "NEW BEST TIME"
 	badge.Visible = false
@@ -262,6 +275,18 @@ local function show(result: Types.RunResult): ()
 	local reward = rewardLabel
 	if reward then
 		reward.Text = `+{result.essence} Essence   (total {result.currency.essence})`
+	end
+
+	local meta = metaLabel
+	if meta then
+		local text = `+{result.xp} XP   ·   Character level {result.metaLevel}`
+		if result.levelsGained > 0 then
+			-- Очко таланта — единственное, ради чего опыт вообще нужен,
+			-- поэтому о нём сказано прямо, а не оставлено на догадку.
+			local points = if result.levelsGained == 1 then "point" else "points"
+			text ..= `   ·   +{result.levelsGained} talent {points}`
+		end
+		meta.Text = text
 	end
 
 	local badge = bestBadge

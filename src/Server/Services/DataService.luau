@@ -27,6 +27,9 @@
 		DataService.AddPetXp(player, uid, amount)               -> boolean
 		DataService.SetEquippedPet(player, uid)                 -> boolean
 		DataService.SetFlag(player, name, value)                -> boolean
+		DataService.AddMetaXp(player, amount)                   -> number
+		DataService.SpendTalentPoint(player, nodeId, maxPoints) -> boolean
+		DataService.ResetTalents(player)                        -> number
 		DataService.TouchLastSeen(player)
 		DataService.AccrueOffline(player, amount, cap)          -> boolean
 		DataService.ClaimOffline(player, reason)                -> number
@@ -341,6 +344,119 @@ function DataService.SetFlag(player: Player, name: string, value: boolean): bool
 	end
 	data.flags[name] = value
 	return true
+end
+
+--[[
+	Мета-уровень персонажа (раздел 6 ТЗ), M5. Возвращает, сколько уровней взято.
+
+	Уровень и очки талантов начисляются здесь и только здесь: «уровень -> очко»
+	это правило профиля, и если его продублировать где-то ещё, две реализации
+	однажды разойдутся в пользу игрока.
+
+	Yield внутри нет: функция вызывается из RewardService, а тот — в том числе
+	из release-хука, то есть при выходе игрока и выключении сервера.
+]]
+function DataService.AddMetaXp(player: Player, amount: number): number
+	if amount <= 0 or not isSaneAmount(amount) then
+		return 0
+	end
+
+	local data = DataService.GetProfile(player)
+	if not data then
+		return 0
+	end
+
+	data.xp += amount
+
+	local gained = 0
+	local maxLevel = Balance.Meta.maxLevel
+
+	while data.level < maxLevel do
+		local need = Balance.MetaXpForLevel(data.level)
+		if data.xp < need then
+			break
+		end
+
+		data.xp -= need
+		data.level += 1
+		data.talentPoints += Balance.Meta.pointsPerLevel
+		gained += 1
+	end
+
+	--[[
+		На максимальном уровне опыт больше не копится: иначе он рос бы вечно
+		и однажды выдал бы пачку уровней при поднятии потолка в патче.
+	]]
+	if data.level >= maxLevel then
+		data.xp = 0
+	end
+
+	if gained > 0 then
+		print(
+			`[DataService] {player.Name} уровень {data.level} (+{gained}), очков талантов: {data.talentPoints}`
+		)
+	end
+
+	return gained
+end
+
+--[[
+	Вложить очко в узел дерева.
+
+	Здесь проверяется только то, чем владеет профиль: есть ли свободное очко
+	и не переполнен ли узел. Законность самого узла — что он существует
+	и что открыт сосед — проверяет TalentService: это правило игры, а не
+	правило хранения. Разделение то же, что у SpendCurrency, который владеет
+	проверкой баланса и ничего не знает о том, что покупается.
+]]
+function DataService.SpendTalentPoint(player: Player, nodeId: string, maxPoints: number): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	if data.talentPoints <= 0 then
+		return false
+	end
+
+	local current = data.talents[nodeId] or 0
+	if current >= maxPoints then
+		return false
+	end
+
+	data.talentPoints -= 1
+	data.talents[nodeId] = current + 1
+	return true
+end
+
+--[[
+	Сброс дерева. Возвращает, сколько очков вернулось.
+
+	Валюту за сброс списывает вызывающий ДО вызова: если списывать после,
+	неудачное списание оставит дерево уже сброшенным и бесплатным.
+]]
+function DataService.ResetTalents(player: Player): number
+	local data = DataService.GetProfile(player)
+	if not data then
+		return 0
+	end
+
+	local refunded = 0
+	for _, points in data.talents do
+		refunded += points
+	end
+
+	if refunded <= 0 then
+		return 0
+	end
+
+	table.clear(data.talents)
+	data.talentPoints += refunded
+
+	print(
+		`[DataService] {player.Name} сбросил дерево талантов, возвращено очков: {refunded}`
+	)
+	return refunded
 end
 
 --[[

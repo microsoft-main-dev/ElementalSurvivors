@@ -42,6 +42,14 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		DataService.AddCurrency(player, "essence", essence, `run:{summary.reason}`)
 	end
 
+	--[[
+		Опыт персонажа (раздел 6 ТЗ), M5. В отличие от уровней внутри забега,
+		этот опыт сохраняется и превращается в очки талантов — правило
+		«уровень -> очко» живёт в DataService, здесь только начисление.
+	]]
+	local xp = Rewards.XpForRun(summary.kills, summary.time)
+	local levelsGained = if xp > 0 then DataService.AddMetaXp(player, xp) else 0
+
 	local _, newBest = DataService.RecordRun(player, summary.kills, summary.time)
 
 	--[[
@@ -61,6 +69,11 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		essence = essence,
 		newBest = newBest,
 		currency = { essence = data.currency.essence, prisms = data.currency.prisms },
+
+		xp = xp,
+		metaLevel = data.level,
+		levelsGained = levelsGained,
+		talentPoints = data.talentPoints,
 	}
 end
 

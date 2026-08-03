@@ -49,8 +49,10 @@ type Runtime = {
 	level: number,
 	timer: number,
 	phase: number,
-	-- Множитель урона от питомца: 1, если стихия способности ему чужая.
+	-- Множители от питомца и талантов: 1, если стихия способности им чужая.
+	-- Кулдаун меньше единицы означает «срабатывает чаще».
 	damageMult: number,
+	cooldownMult: number,
 	damage: number, -- накопленный урон за забег, для HUD и экрана результатов
 	-- Когда этот враг последний раз получал урон именно от этой способности.
 	-- Нужно формам с постоянным контактом (Orbit), см. tickOrbit.
@@ -63,9 +65,10 @@ type Sim = {
 	abilities: { Runtime },
 	byKey: { [string]: Runtime },
 
-	-- Бонусы питомца к стихиям, снятые на входе в бой. Поменяться за забег
-	-- они не могут: питомца в бою не сменить.
+	-- Бонусы питомца и талантов к стихиям, снятые на входе в бой. Поменяться
+	-- за забег они не могут: ни питомца, ни дерево в бою не тронуть.
 	elementDamage: { [Types.Element]: number },
+	elementCooldown: { [Types.Element]: number },
 
 	-- Снаряды: те же плоские массивы, что и у врагов, только меньше.
 	projPosition: { Vector3 },
@@ -145,7 +148,9 @@ local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Ve
 	local count = data.count :: number
 	local radius = data.radius :: number
 	local hitRadius = data.hitRadius :: number
-	local repeatDelay = data.cooldown
+	-- У Orbit cooldown — это задержка ПОВТОРНОГО удара по тому же врагу,
+	-- поэтому множитель кулдауна здесь ускоряет именно её.
+	local repeatDelay = data.cooldown * runtime.cooldownMult
 	local damage = data.damage * runtime.damageMult
 	local hitTimes = runtime.hitTimes
 
@@ -315,7 +320,7 @@ function AbilityService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 		runtime.timer -= dt
 		local fired = runtime.timer <= 0
 		if fired then
-			runtime.timer += data.cooldown
+			runtime.timer += data.cooldown * runtime.cooldownMult
 		end
 
 		if fired then
@@ -346,14 +351,17 @@ function AbilityService.Grant(slot: number, key: string): boolean
 		return false
 	end
 
+	local cooldownMult = sim.elementCooldown[def.element] or 1
+
 	local runtime: Runtime = {
 		def = def,
 		level = 1,
-		timer = def.levels[1].cooldown,
+		timer = def.levels[1].cooldown * cooldownMult,
 		phase = 0,
-		-- Множитель снимается здесь, а не при каждом ударе: питомца за забег
-		-- не сменить, а забыть про бонус в одной из форм — легко.
+		-- Множители снимаются здесь, а не при каждом ударе: за забег они
+		-- не меняются, а забыть про бонус в одной из форм — легко.
 		damageMult = sim.elementDamage[def.element] or 1,
+		cooldownMult = cooldownMult,
 		damage = 0,
 		hitTimes = {},
 	}
@@ -392,7 +400,9 @@ function AbilityService.GetViews(slot: number): { AbilityView }
 			key = runtime.def.key,
 			level = runtime.level,
 			cooldown = if isOrbit then 0 else math.max(runtime.timer, 0),
-			maxCooldown = if isOrbit then 0 else runtime.def.levels[runtime.level].cooldown,
+			-- С множителем: иначе иконка в HUD затемнялась бы по «бумажному»
+			-- кулдауну и расходилась бы с тем, как способность реально бьёт.
+			maxCooldown = if isOrbit then 0 else runtime.def.levels[runtime.level].cooldown * runtime.cooldownMult,
 			phase = runtime.phase,
 			damage = math.floor(runtime.damage),
 		}
@@ -422,7 +432,7 @@ end
 	сюда приходит весь его лоадаут целиком, а не один ключ: бонус к стихии
 	нужен ровно тогда же, когда и способность.
 ]]
-function AbilityService.StartRun(slot: number, player: Player, loadout: Types.PetLoadout): ()
+function AbilityService.StartRun(slot: number, player: Player, loadout: Types.RunLoadout): ()
 	local sim: Sim = {
 		slot = slot,
 		player = player,
@@ -430,6 +440,7 @@ function AbilityService.StartRun(slot: number, player: Player, loadout: Types.Pe
 		byKey = {},
 
 		elementDamage = loadout.elementDamage,
+		elementCooldown = loadout.elementCooldown,
 
 		projPosition = table.create(CAPACITY, Vector3.zero),
 		projDirection = table.create(CAPACITY, Vector3.zero),

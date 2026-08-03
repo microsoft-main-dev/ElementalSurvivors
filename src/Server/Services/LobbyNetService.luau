@@ -31,6 +31,7 @@ local Net = require(Shared.Net)
 local OfflineService = require(script.Parent.OfflineService)
 local PetService = require(script.Parent.PetService)
 local RateLimiter = require(Shared.Util.RateLimiter)
+local TalentService = require(script.Parent.TalentService)
 local Types = require(Shared.Types)
 
 --[[
@@ -66,6 +67,8 @@ local ALLOWED_ACTIONS: { Types.LobbyAction } = {
 	"UpgradePet",
 	"BuyLot",
 	"ClaimOffline",
+	"SpendTalent",
+	"ResetTalents",
 	"Refresh",
 }
 
@@ -127,7 +130,14 @@ end
 local function handle(player: Player, action: string, target: string?, extra: unknown): ()
 	if action == "Refresh" then
 		PetService.PushView(player)
+		TalentService.PushView(player)
 		DataService.PushView(player)
+		return
+	end
+
+	if action == "ResetTalents" then
+		local _, message = TalentService.Reset(player)
+		notify(player, message)
 		return
 	end
 
@@ -178,6 +188,12 @@ local function handle(player: Player, action: string, target: string?, extra: un
 	if action == "UpgradePet" then
 		local _, message = PetService.Upgrade(player, target)
 		notify(player, message)
+		return
+	end
+
+	if action == "SpendTalent" then
+		local _, message = TalentService.Spend(player, target)
+		notify(player, message)
 	end
 end
 
@@ -220,6 +236,7 @@ local function onPlayerAdded(player: Player): ()
 	PetService.GrantStarterIfNeeded(player)
 	OfflineService.Accrue(player)
 	PetService.PushView(player)
+	TalentService.PushView(player)
 	OfflineService.PushReport(player)
 end
 
