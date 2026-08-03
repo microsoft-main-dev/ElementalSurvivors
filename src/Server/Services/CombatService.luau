@@ -1,15 +1,15 @@
 --!strict
 --[[
-	CombatService — оркестратор забега: вход в бой, состояние игрока, автоатака,
+	CombatService — оркестратор забега: вход в бой, состояние игрока,
 	урон от касания, смерть и возврат в лобби.
 
-	Сервер авторитетен во всём (правило 3 ТЗ): клиент не присылает ни одного
-	сообщения о бое. Вход — через ProximityPrompt (дистанцию проверяет движок),
-	выход и смерть решает сервер, урон и убийства считает только он.
+	Сервер авторитетен во всём (правило 3 ТЗ). Единственное, что приходит
+	с клиента в бою, — выбор карточки левел-апа, и его обрабатывает
+	ProgressionService со всеми проверками.
 
-	Базовая автоатака M1 — импульс по площади вокруг игрока по кулдауну.
-	Активных кнопок нет и не будет (раздел 3.6 ТЗ): единственное решение игрока
-	в бою появится в M2 вместе с карточками левел-апа.
+	Боевого кода здесь нет: способности живут в AbilityService, кристаллы
+	в PickupService, уровни в ProgressionService. Этот сервис только связывает
+	их жизненный цикл с жизненным циклом забега и шлёт снимок для HUD.
 
 	Публичный API:
 		CombatService.BeginRun(player)              -> boolean
@@ -22,10 +22,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local AbilityService = require(script.Parent.AbilityService)
 local ArenaService = require(script.Parent.ArenaService)
 local Balance = require(Shared.Config.Balance)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
+local PickupService = require(script.Parent.PickupService)
+local ProgressionService = require(script.Parent.ProgressionService)
 local Types = require(Shared.Types)
 
 export type RunStats = {
@@ -37,8 +40,8 @@ type RunState = {
 	player: Player,
 	slot: number,
 	humanoid: Humanoid,
-	attackTimer: number,
 	lastHitAt: number,
+	snapshotTimer: number,
 	stats: RunStats,
 	connections: { RBXScriptConnection },
 	ending: boolean,
@@ -49,13 +52,13 @@ local ENTER_COOLDOWN = 1.5
 local CombatService = {}
 
 local runs: { [Player]: RunState } = {}
+local runBySlot: { [number]: RunState } = {}
 local lastEnterAttempt: { [Player]: number } = {}
-local attackBuffer: { number } = {}
 
 local notifyRemote: RemoteEvent? = nil
 local runStartedRemote: RemoteEvent? = nil
 local runEndedRemote: RemoteEvent? = nil
-local pulseRemote: UnreliableRemoteEvent? = nil
+local snapshotRemote: UnreliableRemoteEvent? = nil
 
 local function notify(player: Player, message: string): ()
 	local remote = notifyRemote
@@ -80,50 +83,75 @@ local function getHumanoid(player: Player): Humanoid?
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
---[[
-	Автоатака: импульс по площади вокруг игрока.
-	Цели ищет EnemyService через пространственный хеш, урон считает только сервер.
-]]
-local function attackStep(run: RunState, dt: number): ()
-	run.attackTimer -= dt
-	if run.attackTimer > 0 then
-		return
-	end
-	run.attackTimer += Balance.Combat.autoAttack.cooldown
-
+-- Позиция игрока в локальных координатах его арены.
+local function getPlayerLocal(run: RunState): Vector3?
 	local root = getRoot(run.player)
 	if not root then
+		return nil
+	end
+	local world = root.Position - ArenaService.GetOrigin(run.slot)
+	return Vector3.new(world.X, 0, world.Z)
+end
+
+local function sendSnapshot(run: RunState): ()
+	local remote = snapshotRemote
+	if not remote then
 		return
 	end
 
-	local origin = ArenaService.GetOrigin(run.slot)
-	local world = root.Position - origin
-	local localPosition = Vector3.new(world.X, 0, world.Z)
+	local progress = ProgressionService.GetState(run.slot)
+	local snapshot: Types.RunSnapshot = {
+		time = EnemyService.GetRunTime(run.slot),
+		kills = run.stats.kills,
+		level = progress.level,
+		xp = progress.xp,
+		xpToNext = progress.xpToNext,
+		abilities = AbilityService.GetViews(run.slot),
+	}
 
-	local radius = Balance.Combat.autoAttack.radius
-	local damage = Balance.Combat.autoAttack.damage
-	local count = EnemyService.Collect(run.slot, localPosition, radius, attackBuffer)
-
-	local kills = 0
-	for index = 1, count do
-		if EnemyService.Damage(run.slot, attackBuffer[index], damage) then
-			kills += 1
-		end
-	end
-	run.stats.kills += kills
-
-	local remote = pulseRemote
-	if remote then
-		remote:FireClient(run.player, radius)
-	end
+	remote:FireClient(run.player, snapshot)
 end
 
 local function onHeartbeat(deltaTime: number): ()
+	local snapshotInterval = 1 / Balance.Progression.snapshotRate
+
 	for _, run in runs do
-		if not run.ending then
-			attackStep(run, deltaTime)
+		if run.ending then
+			continue
+		end
+
+		-- На паузе левел-апа не тикает ничего боевого: ни способности,
+		-- ни магнит. Врагов останавливает сам EnemyService.
+		if not ProgressionService.IsPaused(run.slot) then
+			local playerLocal = getPlayerLocal(run)
+			if playerLocal then
+				AbilityService.Tick(run.slot, deltaTime, playerLocal)
+				PickupService.Tick(run.slot, deltaTime, playerLocal)
+			end
+		end
+
+		run.snapshotTimer += deltaTime
+		if run.snapshotTimer >= snapshotInterval then
+			run.snapshotTimer = 0
+			sendSnapshot(run)
 		end
 	end
+end
+
+-- Смерть врага от урона: убийство в статистику, кристалл на землю.
+local function onEnemyDeath(slot: number, _player: Player, position: Vector3, xp: number): ()
+	local run = runBySlot[slot]
+	if not run or run.ending then
+		return
+	end
+
+	run.stats.kills += 1
+	PickupService.Drop(slot, position, xp)
+end
+
+-- Подобранный опыт уходит в прогрессию — она сама решит, пора ли уровень.
+local function onCrystalCollected(slot: number, _player: Player, xp: number): ()
+	ProgressionService.AddXp(slot, xp)
 end
 
 --[[
@@ -161,7 +189,11 @@ function CombatService.EndRun(player: Player, reason: Types.RunEndReason): ()
 	table.clear(run.connections)
 
 	EnemyService.StopRun(run.slot)
+	AbilityService.StopRun(run.slot)
+	PickupService.StopRun(run.slot)
+	ProgressionService.StopRun(run.slot)
 	ArenaService.Release(player)
+	runBySlot[run.slot] = nil
 	runs[player] = nil
 
 	local remote = runEndedRemote
@@ -210,13 +242,14 @@ function CombatService.BeginRun(player: Player): boolean
 		player = player,
 		slot = slot,
 		humanoid = humanoid,
-		attackTimer = Balance.Combat.autoAttack.cooldown,
 		lastHitAt = 0,
+		snapshotTimer = 0,
 		stats = { kills = 0, startedAt = os.clock() },
 		connections = {},
 		ending = false,
 	}
 	runs[player] = run
+	runBySlot[slot] = run
 
 	table.insert(
 		run.connections,
@@ -252,11 +285,16 @@ function CombatService.BeginRun(player: Player): boolean
 	end
 
 	EnemyService.StartRun(slot, player, ArenaService.GetOrigin(slot), ArenaService.GetSeed(slot))
+	PickupService.StartRun(slot, player)
+	ProgressionService.StartRun(slot, player)
+	-- Стартовая способность пока одна для всех; в M4 её будет задавать питомец.
+	AbilityService.StartRun(slot, player, Balance.Progression.starterAbility)
 
 	local remote = runStartedRemote
 	if remote then
 		remote:FireClient(player, slot, ArenaService.GetSeed(slot))
 	end
+	sendSnapshot(run)
 
 	return true
 end
@@ -307,13 +345,15 @@ function CombatService.Init(): ()
 	notifyRemote = Net.GetEvent(Net.Id.Notify)
 	runStartedRemote = Net.GetEvent(Net.Id.RunStarted)
 	runEndedRemote = Net.GetEvent(Net.Id.RunEnded)
-	pulseRemote = Net.GetUnreliable(Net.Id.CombatPulse)
+	snapshotRemote = Net.GetUnreliable(Net.Id.RunSnapshot)
 
 	Players.CharacterAutoLoads = false
 end
 
 function CombatService.Start(): ()
 	EnemyService.SetContactHandler(onContact)
+	EnemyService.SetDeathHandler(onEnemyDeath)
+	PickupService.SetCollectHandler(onCrystalCollected)
 	RunService.Heartbeat:Connect(onHeartbeat)
 
 	for _, player in Players:GetPlayers() do
@@ -329,6 +369,10 @@ function CombatService.Start(): ()
 				connection:Disconnect()
 			end
 			EnemyService.StopRun(run.slot)
+			AbilityService.StopRun(run.slot)
+			PickupService.StopRun(run.slot)
+			ProgressionService.StopRun(run.slot)
+			runBySlot[run.slot] = nil
 			runs[player] = nil
 		end
 		ArenaService.Release(player)

@@ -54,6 +54,7 @@ type Sim = {
 
 	time: number,
 	accumulator: number,
+	paused: boolean, -- забег на паузе из-за выбора карточки левел-апа
 
 	-- Structure of Arrays
 	positions: { Vector3 },
@@ -121,6 +122,7 @@ end)()
 
 local sims: { [number]: Sim } = {}
 local contactHandler: ((player: Player, damage: number) -> ())? = nil
+local deathHandler: ((slot: number, player: Player, position: Vector3, xp: number) -> ())? = nil
 
 local eventsRemote: RemoteEvent? = nil
 local resyncRemote: UnreliableRemoteEvent? = nil
@@ -430,6 +432,13 @@ local function onHeartbeat(deltaTime: number): ()
 	local maxSteps = Balance.Combat.maxStepsPerFrame
 
 	for _, sim in sims do
+		if sim.paused then
+			-- На паузе время забега не идёт и накопленная дельта не копится:
+			-- иначе после возврата симуляция рванёт вперёд на всю паузу.
+			sim.accumulator = 0
+			continue
+		end
+
 		sim.accumulator += deltaTime
 
 		local steps = 0
@@ -502,6 +511,7 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 
 		time = 0,
 		accumulator = 0,
+		paused = false,
 
 		positions = table.create(CAPACITY, Vector3.zero),
 		nextPositions = table.create(CAPACITY, Vector3.zero),
@@ -552,6 +562,17 @@ function EnemyService.StopRun(slot: number): ()
 	sims[slot] = nil
 end
 
+function EnemyService.SetPaused(slot: number, paused: boolean): ()
+	local sim = sims[slot]
+	if sim then
+		sim.paused = paused
+	end
+end
+
+function EnemyService.SetDeathHandler(handler: (slot: number, player: Player, position: Vector3, xp: number) -> ()): ()
+	deathHandler = handler
+end
+
 function EnemyService.Damage(slot: number, id: number, amount: number): boolean
 	local sim = sims[slot]
 	if not sim or not sim.alive[id] then
@@ -564,8 +585,75 @@ function EnemyService.Damage(slot: number, id: number, amount: number): boolean
 		return false
 	end
 
+	local position = sim.positions[id]
+	local def = Enemies.List[sim.typeId[id]]
 	release(sim, id, Packet.Reason.Killed)
+
+	-- Дроп опыта и счётчик убийств висят на этом хуке: только смерть от урона,
+	-- отсечение дальних врагов по потолку награды не даёт.
+	local handler = deathHandler
+	if handler then
+		handler(slot, sim.player, position, def.stats.xp)
+	end
+
 	return true
+end
+
+--[[
+	Ближайшие к точке враги — для наведения способностей.
+	Живых в радиусе обычно десятки, а нужны единицы, поэтому вместо сортировки
+	идёт частичный выбор: count проходов по списку кандидатов.
+]]
+function EnemyService.FindNearest(
+	slot: number,
+	position: Vector3,
+	radius: number,
+	count: number,
+	out: { number }
+): number
+	local sim = sims[slot]
+	if not sim then
+		return 0
+	end
+
+	local candidates = sim.neighbours
+	local found = sim.hash.Collect(position, radius, candidates)
+	if found == 0 then
+		return 0
+	end
+
+	local wanted = math.min(count, found)
+	local positions = sim.positions
+
+	for slotIndex = 1, wanted do
+		local bestIndex = slotIndex
+		local best = math.huge
+
+		for index = slotIndex, found do
+			local candidate = positions[candidates[index]]
+			local dx = candidate.X - position.X
+			local dz = candidate.Z - position.Z
+			local distance = dx * dx + dz * dz
+			if distance < best then
+				best = distance
+				bestIndex = index
+			end
+		end
+
+		candidates[slotIndex], candidates[bestIndex] = candidates[bestIndex], candidates[slotIndex]
+		out[slotIndex] = candidates[slotIndex]
+	end
+
+	return wanted
+end
+
+-- Позиция врага в локальных координатах арены; nil, если он уже мёртв.
+function EnemyService.GetPosition(slot: number, id: number): Vector3?
+	local sim = sims[slot]
+	if not sim or not sim.alive[id] then
+		return nil
+	end
+	return sim.positions[id]
 end
 
 function EnemyService.Collect(slot: number, localPosition: Vector3, radius: number, out: { number }): number

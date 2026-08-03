@@ -56,13 +56,9 @@ local Balance = {
 		invulnerability = 0.5, -- i-frames после получения урона, секунд
 		deathReturnDelay = 3, -- через сколько секунд после смерти вернуть в лобби
 
-		-- Базовая автоатака M1: импульс по площади вокруг игрока.
-		-- В M2 её заменит data-driven способность из Config/Abilities.
-		autoAttack = table.freeze({
-			damage = 14,
-			cooldown = 0.7,
-			radius = 16,
-		}),
+		-- В каком радиусе способности ищут цели для наведения.
+		abilitySearchRadius = 70,
+		maxProjectiles = 160, -- потолок одновременно летящих снарядов на арену
 
 		-- Враги
 		separationRadius = 3.2, -- на каком расстоянии враги начинают расталкиваться
@@ -74,9 +70,41 @@ local Balance = {
 		contactPadding = 0, -- добавка к сумме радиусов при проверке касания
 	}),
 
+	--[[
+		Внутрибоевая прогрессия (раздел 3.6 ТЗ).
+		Уровни забега не сохраняются — они сбрасываются каждый заход.
+	]]
+	Progression = table.freeze({
+		maxActiveAbilities = 5, -- 1 стартовая + 4 подобранные
+		starterAbility = "FireOrbit", -- в M4 её начнёт задавать питомец
+		cardsPerLevel = 3,
+		choiceTimeout = 25, -- если игрок не выбрал (отошёл), сервер выберет сам
+		snapshotRate = 10, -- сколько раз в секунду обновляется HUD
+
+		-- Кривая опыта: формула, а не таблица (правило 6 ТЗ).
+		xpBase = 6,
+		xpGrowth = 1.26,
+	}),
+
+	-- Кристаллы опыта и магнит.
+	Pickup = table.freeze({
+		magnetRadius = 16, -- в M5 станет характеристикой игрока
+		magnetSpeed = 70,
+		collectRadius = 3,
+		maxAlive = 500,
+		eventInterval = 0.1,
+		size = 1.1,
+		height = 1.2,
+	}),
+
 	Debug = table.freeze({
 		showStats = true, -- оверлей FPS/врагов; выключить перед релизом (M7)
 	}),
 }
+
+-- Сколько опыта нужно, чтобы уйти с уровня level на следующий.
+function Balance.XpForLevel(level: number): number
+	return math.floor(Balance.Progression.xpBase * Balance.Progression.xpGrowth ^ (level - 1) + 0.5)
+end
 
 return table.freeze(Balance)

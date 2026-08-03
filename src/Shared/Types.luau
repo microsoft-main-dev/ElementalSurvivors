@@ -77,6 +77,66 @@ export type WaveEntry = {
 	maxAlive: number, -- жёсткий потолок живых врагов
 }
 
+--[[
+	Формы способностей (раздел 3.4 ТЗ). Логика каждой формы написана один раз
+	в AbilityService, а сама способность — строка данных в Config/Abilities.
+	В M2 реализованы Orbit, Projectile, Aura и Nova; Cone и Chain — задел.
+]]
+export type AbilityShape = "Orbit" | "Projectile" | "Aura" | "Nova" | "Cone" | "Chain"
+
+--[[
+	Один уровень способности. Поля необязательные намеренно: у разных форм
+	разный набор. Корректность проверяет валидатор при старте сервера —
+	так строгая типизация не мешает data-driven таблицам.
+]]
+export type AbilityLevel = {
+	damage: number,
+	cooldown: number,
+	count: number?, -- орбов / снарядов за срабатывание
+	radius: number?, -- радиус орбиты, ауры или вспышки
+	hitRadius: number?, -- радиус поражения орба или снаряда
+	angularSpeed: number?, -- скорость вращения орбиты, рад/с
+	speed: number?, -- скорость снаряда
+	lifetime: number?, -- время жизни снаряда
+	pierce: number?, -- сколько врагов пробивает снаряд
+}
+
+export type AbilityDef = {
+	key: string,
+	typeId: number, -- индекс в Abilities.List, летит по сети
+	displayName: string,
+	description: string,
+	element: Element,
+	shape: AbilityShape,
+	levels: { AbilityLevel },
+}
+
+-- Состояние способности в забеге, уходит на клиент для HUD и отрисовки.
+export type AbilityView = {
+	key: string,
+	level: number,
+	cooldown: number, -- сколько осталось до срабатывания
+	maxCooldown: number,
+	phase: number, -- угол орбиты; нужен, чтобы орбы на клиенте совпали с сервером
+}
+
+-- Карточка выбора при левел-апе.
+export type LevelUpCard = {
+	abilityKey: string,
+	isNew: boolean,
+	level: number, -- каким станет уровень, если взять
+}
+
+-- Пакет для HUD, шлётся 10 раз в секунду.
+export type RunSnapshot = {
+	time: number,
+	kills: number,
+	level: number,
+	xp: number,
+	xpToNext: number,
+	abilities: { AbilityView },
+}
+
 -- Причина завершения забега.
 export type RunEndReason = "Death" | "Left"
 

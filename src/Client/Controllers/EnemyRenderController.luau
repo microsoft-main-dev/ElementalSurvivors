@@ -46,6 +46,7 @@ local EnemyRenderController = {}
 local player = Players.LocalPlayer
 
 local active = false
+local paused = false -- бой стоит из-за выбора карточки левел-апа
 local origin = Vector3.zero
 local accumulator = 0
 
@@ -321,6 +322,13 @@ local function onHeartbeat(deltaTime: number): ()
 		return
 	end
 
+	if paused then
+		-- Пауза должна выглядеть как пауза: накопленную дельту сбрасываем,
+		-- иначе после выбора карточки толпа рванёт вперёд рывком.
+		accumulator = 0
+		return
+	end
+
 	local tickRate = Balance.Combat.tickRate
 	accumulator += deltaTime
 
@@ -369,6 +377,7 @@ local function onRunStarted(slot: number, seed: number): ()
 	container = folder
 
 	getPool()
+	paused = false
 	active = true
 end
 
@@ -430,6 +439,9 @@ function EnemyRenderController.Start(): ()
 	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(onRunEnded)
 	Net.GetEvent(Net.Id.EnemyEvents).OnClientEvent:Connect(onEvents)
 	Net.GetUnreliable(Net.Id.EnemyResync).OnClientEvent:Connect(onResync)
+	Net.GetEvent(Net.Id.CombatPaused).OnClientEvent:Connect(function(value: boolean)
+		paused = value
+	end)
 
 	RunService.Heartbeat:Connect(onHeartbeat)
 end
