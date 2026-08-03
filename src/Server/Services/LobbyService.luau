@@ -199,6 +199,15 @@ local function buildSign(parent: Instance, position: Vector3): ()
 	surface.Parent = board
 
 	if Branding.logoWideAssetId > 0 then
+		--[[
+			Табличка под логотипом перекрашивается в светлое: сам логотип
+			нарисован тёмно-зелёным под светлый фон, и на тёмной доске
+			кольцо и слово «4pots» дали бы контраст около 2:1, то есть
+			не читались бы вовсе. Заглушке ниже светлый фон не нужен —
+			она рисуется светлым текстом и рассчитана как раз на тёмную доску.
+		]]
+		board.Color = Palette.Brand.white
+
 		local image = Instance.new("ImageLabel")
 		image.Size = UDim2.fromScale(1, 1)
 		image.BackgroundTransparency = 1

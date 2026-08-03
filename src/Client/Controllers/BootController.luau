@@ -38,12 +38,32 @@ local function buildLogo(parent: Instance): ()
 	ratio.Parent = holder
 
 	if Branding.logoSquareAssetId > 0 then
+		--[[
+			Светлая плашка под логотипом.
+
+			Логотип нарисован тёмно-зелёным и рассчитан на светлый фон, а экран
+			загрузки почти чёрный: контраст тёмно-зелёного на нём около 2:1,
+			то есть кольцо и слово «4pots» на голом фоне просто не читались бы.
+			Плашка решает это без второго файла; если однажды появится вариант
+			«выворотка» со светлыми штрихами, её нужно будет убрать.
+		]]
+		local plate = Instance.new("Frame")
+		plate.Name = "Plate"
+		plate.Size = UDim2.fromScale(1, 1)
+		plate.BackgroundColor3 = Palette.Brand.white
+		plate.BorderSizePixel = 0
+		plate.Parent = holder
+
+		local plateCorner = Instance.new("UICorner")
+		plateCorner.CornerRadius = UDim.new(0.16, 0)
+		plateCorner.Parent = plate
+
 		local image = Instance.new("ImageLabel")
 		image.Size = UDim2.fromScale(1, 1)
 		image.BackgroundTransparency = 1
 		image.ScaleType = Enum.ScaleType.Fit
 		image.Image = `rbxassetid://{Branding.logoSquareAssetId}`
-		image.Parent = holder
+		image.Parent = plate
 		return
 	end
 
