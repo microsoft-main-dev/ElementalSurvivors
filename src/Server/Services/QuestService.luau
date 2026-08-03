@@ -29,6 +29,7 @@ local Balance = require(Shared.Config.Balance)
 local DataService = require(script.Parent.DataService)
 local Net = require(Shared.Net)
 local Types = require(Shared.Types)
+local WheelService = require(script.Parent.WheelService)
 
 type ProfileQuest = Types.ProfileQuest
 type QuestKind = Types.QuestKind
@@ -145,6 +146,7 @@ function QuestService.BuildView(player: Player): Types.QuestsView?
 	return {
 		quests = views,
 		resetsInSeconds = math.max(data.daily.resetAt - os.time(), 0),
+		wheelReadyInSeconds = WheelService.NextSpinIn(player),
 	}
 end
 

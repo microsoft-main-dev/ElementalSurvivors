@@ -93,6 +93,15 @@ function WheelService.Spin(player: Player): (boolean, string?)
 
 	DataService.SaveNow(player)
 
+	--[[
+		Панель показывает и список призов, и кулдаун, поэтому после прокрутки
+		её надо обновить целиком. Требуется лениво: QuestService сам зовёт
+		WheelService ради времени до прокрутки, и ссылка на верхнем уровне
+		повесила бы загрузку сервисов.
+	]]
+	local QuestService = require(script.Parent.QuestService)
+	QuestService.PushView(player)
+
 	local remote = resultRemote
 	if remote then
 		local result: Types.WheelResult = {

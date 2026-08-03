@@ -423,10 +423,11 @@ function LobbyController.Start(): ()
 		refreshPanels()
 	end)
 
-	Net.GetEvent(Net.Id.WheelResult).OnClientEvent:Connect(function(_result: Types.WheelResult)
-		-- Сам приз показывает уведомление с сервера; здесь достаточно
-		-- перерисовать панель, чтобы кнопка прокрутки погасла.
-		refreshPanels()
+	Net.GetEvent(Net.Id.WheelResult).OnClientEvent:Connect(function(result: Types.WheelResult)
+		local daily = dailyPanel
+		if daily then
+			daily.ShowSpin(result)
+		end
 	end)
 
 	Net.GetEvent(Net.Id.EggResult).OnClientEvent:Connect(function(results: { Types.EggRollResult })

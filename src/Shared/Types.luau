@@ -458,6 +458,10 @@ export type QuestView = {
 export type QuestsView = {
 	quests: { QuestView },
 	resetsInSeconds: number,
+	-- Сколько ждать бесплатной прокрутки колеса; 0 означает «можно сейчас».
+	-- Живёт здесь, а не отдельным пакетом: и то, и другое — ежедневное,
+	-- и панель у них общая.
+	wheelReadyInSeconds: number,
 }
 
 -- Результат прокрутки колеса фортуны (раздел 4 ТЗ).

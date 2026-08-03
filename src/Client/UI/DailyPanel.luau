@@ -20,6 +20,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Balance = require(Shared.Config.Balance)
 local Palette = require(Shared.Config.Palette)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.UiKit)
@@ -28,6 +29,7 @@ export type Panel = {
 	Open: (section: string) -> (),
 	Close: () -> (),
 	Refresh: (quests: Types.QuestsView?, leaderboard: { Types.LeaderboardEntry }?) -> (),
+	ShowSpin: (result: Types.WheelResult) -> (),
 }
 
 local DailyPanel = {}
@@ -65,6 +67,11 @@ function DailyPanel.Build(parent: Instance, send: (action: string, target: strin
 	local section = "Quests"
 	local questsView: Types.QuestsView? = nil
 	local leaderboard: { Types.LeaderboardEntry } = {}
+
+	-- Состояние колеса: сколько ждать и что выпало в прошлый раз.
+	local wheelReadyIn = 0
+	local lastPrizeIndex = 0
+	local lastPrizeName = ""
 
 	local function renderQuests(): ()
 		local view = questsView
@@ -104,22 +111,59 @@ function DailyPanel.Build(parent: Instance, send: (action: string, target: strin
 		end
 	end
 
-	local function renderWheel(): ()
-		window.title.Text = "Wheel of fortune"
-		window.subtitle.Text = "One free spin every 24 hours. All prizes are Essence."
-		action.Visible = true
-		action.Text = "Spin"
-		UiKit.SetEnabled(action, true)
+	--[[
+		Колесо.
 
-		local hint = UiKit.Label(
-			list,
-			"Hint",
-			"Spin results are decided by the server. If the wheel is not ready yet, it will say so.",
-			14,
-			Palette.UI.subtext
-		)
-		hint.Size = UDim2.new(1, -8, 0, 44)
-		hint.TextWrapped = true
+		Список призов показывается целиком и с шансами. Лутбокс, содержимое
+		которого игрок не видит, — это не интрига, а непонятно за что выданное
+		число: до этого игрок не знал даже, что вообще может выпасть.
+
+		Проценты считаются из тех же весов Balance.Daily.wheelPrizes, по которым
+		сервер и роллит, поэтому разойтись они не могут.
+	]]
+	local function renderWheel(): ()
+		local prizes = Balance.Daily.wheelPrizes
+
+		window.title.Text = "Wheel of fortune"
+		action.Visible = true
+
+		local ready = wheelReadyIn <= 0
+		action.Text = if ready then "SPIN" else `Ready in {formatTime(wheelReadyIn)}`
+		UiKit.SetEnabled(action, ready)
+
+		window.subtitle.Text = if lastPrizeName ~= ""
+			then `You won: {lastPrizeName}`
+			else "One free spin every 24 hours. All prizes are Essence."
+
+		local total = 0
+		for _, prize in prizes do
+			total += prize.weight
+		end
+
+		for order, prize in prizes do
+			local chance = prize.weight / total * 100
+			--[[
+				Крупные призы подсвечены ярче: шкала от блёклого к яркому
+				читается быстрее, чем сравнение шести чисел глазами.
+			]]
+			local accent = if order >= #prizes - 1
+				then Palette.Element.Lightning
+				elseif order >= #prizes - 3 then Palette.Element.Nature
+				else Palette.UI.panel
+
+			local row = UiKit.Row(list, order, accent)
+			row.badge.Text = string.format("%.0f%%", chance)
+			row.title.Text = prize.displayName
+			row.subtitle.Text = string.format("Chance %.1f%%", chance)
+
+			-- Выпавший приз остаётся отмеченным до закрытия панели:
+			-- иначе результат прокрутки исчезает быстрее, чем его успевают
+			-- прочитать, и колесо снова выглядит как случайное число.
+			if order == lastPrizeIndex then
+				row.frame.BackgroundTransparency = 0
+				row.title.Text = `{prize.displayName}   <-- YOU WON`
+			end
+		end
 	end
 
 	local function renderLeaderboard(): ()
@@ -167,6 +211,7 @@ function DailyPanel.Build(parent: Instance, send: (action: string, target: strin
 		Refresh = function(quests: Types.QuestsView?, top: { Types.LeaderboardEntry }?)
 			if quests then
 				questsView = quests
+				wheelReadyIn = quests.wheelReadyInSeconds
 			end
 			if top then
 				leaderboard = top
@@ -174,6 +219,20 @@ function DailyPanel.Build(parent: Instance, send: (action: string, target: strin
 			if window.screen.Enabled then
 				render()
 			end
+		end,
+
+		--[[
+			Результат прокрутки. Приходит отдельным пакетом, а не в общем
+			обновлении: выпавший приз надо отметить в списке, и знать, какой
+			именно, панель может только отсюда.
+		]]
+		ShowSpin = function(result: Types.WheelResult)
+			lastPrizeIndex = result.prizeIndex
+			lastPrizeName = result.displayName
+			wheelReadyIn = result.nextSpinInSeconds
+			section = "Wheel"
+			window.screen.Enabled = true
+			render()
 		end,
 	}
 
