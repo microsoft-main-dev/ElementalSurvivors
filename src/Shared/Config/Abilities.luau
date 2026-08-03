@@ -34,12 +34,25 @@ local definitions: { AbilityDef } = {
 		description = "Burning orbs circle around you.",
 		element = "Fire",
 		shape = "Orbit",
+		--[[
+			Один орб на широком радиусе — это не кольцо, а точка, вращающаяся по
+			кругу: угловое покрытие на 1-м уровне (count=1, hitRadius=3.2, radius=9)
+			было около 2*hitRadius/radius ≈ 0.71 рад ≈ 11% окружности за один
+			момент времени. Отсюда «попадает в одного из десяти» на старте —
+			не баг формы, а то, что стартовый уровень слишком редко выметал место,
+			где стоит враг. Раньше count=1 давал ровно одну такую точку.
+
+			Здесь: count поднят до 2 с первого уровня (сразу две точки на
+			противоположных сторонах), hitRadius и angularSpeed увеличены —
+			орб чаще проходит через место, где стоит враг. Урон на удар немного
+			снижен, чтобы суммарный DPS не подскочил вдвое вместе с числом орбов.
+		]]
 		levels = {
-			{ damage = 11, cooldown = 0.5, count = 1, radius = 9, hitRadius = 3.2, angularSpeed = 2.2 },
-			{ damage = 15, cooldown = 0.5, count = 2, radius = 9, hitRadius = 3.2, angularSpeed = 2.4 },
-			{ damage = 20, cooldown = 0.45, count = 2, radius = 11, hitRadius = 3.6, angularSpeed = 2.6 },
-			{ damage = 26, cooldown = 0.45, count = 3, radius = 11, hitRadius = 3.6, angularSpeed = 2.8 },
-			{ damage = 34, cooldown = 0.4, count = 4, radius = 12, hitRadius = 4, angularSpeed = 3 },
+			{ damage = 8, cooldown = 0.5, count = 2, radius = 8, hitRadius = 4.2, angularSpeed = 3 },
+			{ damage = 12, cooldown = 0.5, count = 2, radius = 8, hitRadius = 4.5, angularSpeed = 3.2 },
+			{ damage = 16, cooldown = 0.45, count = 3, radius = 9, hitRadius = 4.5, angularSpeed = 3.2 },
+			{ damage = 21, cooldown = 0.45, count = 3, radius = 9, hitRadius = 4.8, angularSpeed = 3.4 },
+			{ damage = 28, cooldown = 0.4, count = 4, radius = 10, hitRadius = 5, angularSpeed = 3.6 },
 		},
 	},
 	{
