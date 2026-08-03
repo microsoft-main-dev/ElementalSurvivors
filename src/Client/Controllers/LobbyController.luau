@@ -27,13 +27,16 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local DailyPanel = require(script.Parent.Parent.UI.DailyPanel)
 local EggsPanel = require(script.Parent.Parent.UI.EggsPanel)
+local ItemsPanel = require(script.Parent.Parent.UI.ItemsPanel)
 local Net = require(Shared.Net)
 local OfflinePanel = require(script.Parent.Parent.UI.OfflinePanel)
 local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
 local PetsPanel = require(script.Parent.Parent.UI.PetsPanel)
 local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
+local StagePanel = require(script.Parent.Parent.UI.StagePanel)
 local TalentsPanel = require(script.Parent.Parent.UI.TalentsPanel)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.Parent.UI.UiKit)
@@ -52,10 +55,16 @@ local eggsPanel: EggsPanel.Panel? = nil
 local shopPanel: ShopPanel.Panel? = nil
 local talentsPanel: TalentsPanel.Panel? = nil
 local offlinePanel: OfflinePanel.Panel? = nil
+local stagePanel: StagePanel.Panel? = nil
+local itemsPanel: ItemsPanel.Panel? = nil
+local dailyPanel: DailyPanel.Panel? = nil
 
 local profileView: Types.ProfileView? = nil
 local petsView: Types.PetsView? = nil
 local talentsView: Types.TalentsView? = nil
+local itemsView: Types.ItemsView? = nil
+local questsView: Types.QuestsView? = nil
+local leaderboard: { Types.LeaderboardEntry } = {}
 
 local petModel: BasePart? = nil
 local petSpin = 0
@@ -110,6 +119,21 @@ local function refreshPanels(): ()
 	if talents then
 		talents.Refresh(talentsView, essence)
 	end
+
+	local stage = stagePanel
+	if stage then
+		stage.Refresh(if profileView then profileView.storyStage else 1)
+	end
+
+	local items = itemsPanel
+	if items then
+		items.Refresh(itemsView)
+	end
+
+	local daily = dailyPanel
+	if daily then
+		daily.Refresh(questsView, leaderboard)
+	end
 end
 
 local function closeAll(): ()
@@ -132,6 +156,18 @@ local function closeAll(): ()
 	local offline = offlinePanel
 	if offline then
 		offline.Close()
+	end
+	local stage = stagePanel
+	if stage then
+		stage.Close()
+	end
+	local items = itemsPanel
+	if items then
+		items.Close()
+	end
+	local daily = dailyPanel
+	if daily then
+		daily.Close()
 	end
 end
 
@@ -162,6 +198,23 @@ local function openPanel(name: string, target: string?): ()
 		local talents = talentsPanel
 		if talents then
 			talents.Open()
+		end
+	elseif name == "Stage" then
+		local stage = stagePanel
+		if stage then
+			stage.Open()
+		end
+	elseif name == "Items" then
+		local items = itemsPanel
+		if items then
+			items.Open()
+		end
+	elseif name == "Quests" or name == "Wheel" or name == "Leaderboard" then
+		-- Три объекта лобби делят одну панель: у них одинаковая форма,
+		-- а открывается тот раздел, к которому подошёл игрок.
+		local daily = dailyPanel
+		if daily then
+			daily.Open(name)
 		end
 	end
 end
@@ -253,12 +306,16 @@ local function buildBar(): ()
 	local holder = UiKit.Frame(gui, "Holder")
 	holder.AnchorPoint = Vector2.new(0.5, 1)
 	holder.Position = UDim2.new(0.5, 0, 1, -14)
-	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 4 + BUTTON_GAP * 3, UiKit.ButtonHeight)
+	-- Кнопок стало семь, и на телефоне в ряд они не влезут: список
+	-- переносится на вторую строку, поэтому у держателя двойная высота.
+	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 4 + BUTTON_GAP * 3, UiKit.ButtonHeight * 2 + BUTTON_GAP)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Wraps = true
 	layout.Padding = UDim.new(0, BUTTON_GAP)
 	layout.Parent = holder
 
@@ -267,10 +324,13 @@ local function buildBar(): ()
 		вместе с собой: кнопка, открывающая пустое окно, хуже отсутствующей.
 	]]
 	local buttons: { { name: string, text: string } } = {
+		{ name = "Stage", text = "Play" },
 		{ name = "Pets", text = "Pets" },
+		{ name = "Items", text = "Gear" },
 		{ name = "Eggs", text = "Eggs" },
 		{ name = "Shop", text = "Shop" },
 		{ name = "Talents", text = "Talents" },
+		{ name = "Quests", text = "Daily" },
 	}
 
 	for order, entry in buttons do
@@ -310,6 +370,9 @@ function LobbyController.Start(): ()
 	shopPanel = ShopPanel.Build(playerGui, send)
 	talentsPanel = TalentsPanel.Build(playerGui, send)
 	offlinePanel = OfflinePanel.Build(playerGui, send)
+	stagePanel = StagePanel.Build(playerGui, send)
+	itemsPanel = ItemsPanel.Build(playerGui, send)
+	dailyPanel = DailyPanel.Build(playerGui, send)
 
 	--[[
 		Промпты объектов лобби. Какое окно открыть, написано в атрибуте самого
@@ -342,6 +405,27 @@ function LobbyController.Start(): ()
 
 	Net.GetEvent(Net.Id.TalentsView).OnClientEvent:Connect(function(view: Types.TalentsView)
 		talentsView = view
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.ItemsView).OnClientEvent:Connect(function(view: Types.ItemsView)
+		itemsView = view
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.QuestsView).OnClientEvent:Connect(function(view: Types.QuestsView)
+		questsView = view
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.LeaderboardView).OnClientEvent:Connect(function(top: { Types.LeaderboardEntry })
+		leaderboard = top
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.WheelResult).OnClientEvent:Connect(function(_result: Types.WheelResult)
+		-- Сам приз показывает уведомление с сервера; здесь достаточно
+		-- перерисовать панель, чтобы кнопка прокрутки погасла.
 		refreshPanels()
 	end)
 

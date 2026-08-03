@@ -28,7 +28,6 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Branding = require(Shared.Config.Branding)
-local CombatService = require(script.Parent.CombatService)
 local Eggs = require(Shared.Config.Eggs)
 local Palette = require(Shared.Config.Palette)
 
@@ -242,7 +241,7 @@ end
 	Заглушка портала: площадка, две неоновые стойки и перекладина.
 	Настоящая логика (запрос слота арены, выбор режима, телепорт) — в M1.
 ]]
-local function buildPortal(parent: Instance): ProximityPrompt
+local function buildPortal(parent: Instance): ()
 	local portal = Instance.new("Folder")
 	portal.Name = "Portal"
 	portal.Parent = parent
@@ -278,16 +277,21 @@ local function buildPortal(parent: Instance): ProximityPrompt
 
 	buildSign(portal, center + Vector3.new(0, 28, 0))
 
+	--[[
+		Портал больше не запускает забег сразу: с M6 у игрока есть выбор режима
+		и уровня, а выбор — это интерфейс, то есть клиент. Атрибут Panel
+		говорит клиенту, какое окно открыть, а сам вход в бой приходит обратно
+		действием EnterRun через LobbyNetService, где и проверяется.
+	]]
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.Name = "EnterPrompt"
 	prompt.ObjectText = Branding.gameName
-	prompt.ActionText = "Enter arena"
+	prompt.ActionText = "Choose stage"
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = 14
 	prompt.RequiresLineOfSight = false
+	prompt:SetAttribute("Panel", "Stage")
 	prompt.Parent = pad
-
-	return prompt
 end
 
 --[[
@@ -407,6 +411,48 @@ local function buildPetStand(parent: Instance): ()
 	addPrompt(base, "Pets", "Manage", "Pets")
 end
 
+--[[
+	Стенд рекордсменов, доска квестов и колесо фортуны (раздел 4 ТЗ).
+
+	Все три — просто тумбы с точкой входа: содержимое живёт в панелях на клиенте,
+	а данные приходят с сервера. Ставить их геометрию по-разному незачем,
+	поэтому одна функция на три объекта.
+]]
+local function buildKiosk(
+	parent: Instance,
+	name: string,
+	center: Vector3,
+	color: Color3,
+	panel: string,
+	label: string
+): ()
+	local body = makePart(name, Vector3.new(10, 6, 3), center + Vector3.new(0, 3, 0), Palette.Lobby.sign, parent)
+	body.CanCollide = true
+
+	local top = makePart(`{name}Top`, Vector3.new(10, 0.6, 3), center + Vector3.new(0, 6.3, 0), color, parent)
+	top.Material = Enum.Material.Neon
+	top.CanCollide = false
+
+	local surface = Instance.new("SurfaceGui")
+	surface.Name = "Display"
+	surface.Face = Enum.NormalId.Front
+	surface.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surface.PixelsPerStud = 50
+	surface.LightInfluence = 0
+	surface.Parent = body
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.fromScale(1, 1)
+	title.BackgroundTransparency = 1
+	title.Font = Enum.Font.GothamBold
+	title.Text = label
+	title.TextColor3 = Palette.UI.text
+	title.TextScaled = true
+	title.Parent = surface
+
+	addPrompt(body, label, "Open", panel)
+end
+
 function LobbyService.Init(): ()
 	applyLighting()
 	clearDefaults()
@@ -426,13 +472,21 @@ function LobbyService.Init(): ()
 	buildShop(folder)
 	buildPetStand(folder)
 
-	local prompt = buildPortal(folder)
+	-- Три объекта раздела 4, добравшиеся до игры в M6. Стоят вдоль -X,
+	-- напротив прилавка, чтобы лобби не перекосило в одну сторону.
+	local kioskX = -Balance.Lobby.shopOffset
+	buildKiosk(folder, "Leaderboard", Vector3.new(kioskX, 0, -26), Palette.Element.Lightning, "Leaderboard", "TOP RUNS")
+	buildKiosk(folder, "Quests", Vector3.new(kioskX, 0, 26), Palette.Element.Nature, "Quests", "QUESTS")
+	buildKiosk(
+		folder,
+		"Wheel",
+		Vector3.new(0, 0, Balance.Lobby.eggRowOffset + 26),
+		Palette.Element.Dark,
+		"Wheel",
+		"WHEEL"
+	)
 
-	-- Дистанцию и наличие персонажа проверяет сам ProximityPrompt на сервере,
-	-- остальные проверки (свободный слот, повторный вход, кулдаун) — в CombatService.
-	prompt.Triggered:Connect(function(player: Player)
-		CombatService.BeginRun(player)
-	end)
+	buildPortal(folder)
 
 	lobbyFolder = folder
 end

@@ -198,6 +198,63 @@ export type StageDef = {
 }
 
 --[[
+	Боссы (разделы 3.5 и 5.1 ТЗ), M6.
+
+	Как и у обычных врагов, уникальных боссов не рисуем: босса задаёт архетип
+	с набором фаз и атак, а разнообразие даёт комбинация «архетип × стихия ×
+	номер уровня».
+
+	Атаки обязаны иметь телеграф — время, когда область удара уже показана,
+	а урона ещё нет. На автобое игрок не может ни блокировать, ни уклоняться
+	осознанно, если не видит, куда сейчас ударят; атака без предупреждения
+	читается как несправедливость, а не как сложность.
+]]
+export type BossAttackKind =
+	"Charge" -- рывок по прямой через арену
+	| "Shockwave" -- расходящееся кольцо от босса
+	| "Summon" -- призыв обычных врагов
+
+export type BossAttack = {
+	kind: BossAttackKind,
+	telegraph: number, -- секунд между показом области и уроном
+	cooldown: number,
+	damage: number,
+	radius: number,
+	speed: number?, -- скорость рывка или волны
+	count: number?, -- сколько врагов призывает Summon
+}
+
+--[[
+	Фаза боссфайта. Действует та фаза, у которой healthAbove не больше текущей
+	доли здоровья; список идёт от полного здоровья к нулю.
+]]
+export type BossPhase = {
+	healthAbove: number, -- 0..1
+	moveSpeed: number,
+	attacks: { BossAttack },
+}
+
+export type BossDef = {
+	key: string,
+	typeId: number,
+	displayName: string,
+	element: Element,
+	radius: number,
+	contactDamage: number,
+	model: EnemyModel,
+	phases: { BossPhase },
+}
+
+-- Состояние босса для клиента: полоса здоровья и телеграфы атак.
+export type BossView = {
+	key: string,
+	health: number,
+	maxHealth: number,
+	x: number,
+	z: number,
+}
+
+--[[
 	Питомцы (разделы 6 и 6.1 ТЗ). Питомец — это класс: он задаёт стартовую
 	способность боя, даёт пассивные бонусы и усиливает свою стихию.
 
@@ -348,6 +405,78 @@ export type TalentsView = {
 }
 
 --[[
+	Экипировка (раздел 6.1 ТЗ), M6.
+
+	Предметы не описываются поштучно: предмет — это ролл «слот × редкость ×
+	набор характеристик». Характеристики намеренно те же, что уже умеет
+	лоадаут забега, чтобы экипировка добавлялась данными, а не кодом в бою.
+]]
+export type ItemSlot = "Helmet" | "Chest" | "Boots" | "Trinket"
+export type ItemRarity = "Common" | "Rare" | "Epic" | "Legendary"
+
+-- AllDamage — множитель ко всем стихиям, остальные — добавки к базе.
+export type ItemStatKind = "MaxHealth" | "WalkSpeed" | "MagnetRadius" | "AllDamage"
+
+export type ItemInstance = {
+	uid: string, -- выдаёт профиль, уникален на всю жизнь аккаунта
+	slot: ItemSlot,
+	rarity: ItemRarity,
+	stageIndex: number, -- с какого уровня выпал; от него зависели числа
+	stats: { [string]: number },
+}
+
+export type ItemView = {
+	uid: string,
+	slot: ItemSlot,
+	rarity: ItemRarity,
+	stats: { [string]: number },
+	power: number,
+	equipped: boolean,
+}
+
+export type ItemsView = {
+	items: { ItemView },
+	equipped: { [string]: string }, -- слот -> uid
+}
+
+--[[
+	Ежедневные квесты (раздел 4 ТЗ), M6. Прогресс тикает из боёв,
+	награда забирается вручную — иначе игрок не заметит, что что-то получил.
+]]
+export type QuestKind = "Kills" | "Runs" | "Survive" | "StageClear"
+
+export type QuestView = {
+	id: string,
+	kind: QuestKind,
+	displayName: string,
+	target: number,
+	progress: number,
+	essence: number,
+	claimed: boolean,
+}
+
+export type QuestsView = {
+	quests: { QuestView },
+	resetsInSeconds: number,
+}
+
+-- Результат прокрутки колеса фортуны (раздел 4 ТЗ).
+export type WheelResult = {
+	prizeIndex: number,
+	displayName: string,
+	essence: number,
+	nextSpinInSeconds: number,
+}
+
+-- Строка стенда рекордсменов (раздел 4 ТЗ), M6.
+export type LeaderboardEntry = {
+	rank: number,
+	userId: number,
+	name: string,
+	seconds: number,
+}
+
+--[[
 	Действия, которые игрок может запросить в лобби. Строка приходит с клиента,
 	поэтому список закрытый: всё, чего здесь нет, отбрасывается на входе.
 ]]
@@ -359,6 +488,10 @@ export type LobbyAction =
 	| "ClaimOffline"
 	| "SpendTalent"
 	| "ResetTalents"
+	| "EnterRun"
+	| "SpinWheel"
+	| "ClaimQuest"
+	| "EquipItem"
 	| "Refresh"
 
 --[[
@@ -393,10 +526,26 @@ export type ProfileStats = {
 	playtime: number, -- суммарное время в боях, секунд
 }
 
+--[[
+	Квест в профиле. Хранится целиком, а не ссылкой на таблицу заданий:
+	правка Config/Quests не должна менять условия у задания, которое игрок
+	уже начал выполнять сегодня.
+]]
+export type ProfileQuest = {
+	id: string,
+	kind: QuestKind,
+	target: number,
+	progress: number,
+	essence: number,
+	claimed: boolean,
+}
+
 export type ProfileDaily = {
 	lastWheelSpin: number,
 	streak: number,
-	quests: { unknown },
+	quests: { ProfileQuest },
+	-- Когда набор заданий сменится. Серверное время, не клиентское.
+	resetAt: number,
 }
 
 --[[
@@ -440,11 +589,14 @@ export type ProfileData = {
 		полям: их будет много, а форма у всех одинаковая.
 	]]
 	flags: { [string]: boolean },
+	-- Слот -> uid надетого предмета (M6).
 	equipment: { [string]: string },
 	inventory: {
-		items: { unknown },
+		items: { ItemInstance },
 		consumables: { [string]: number },
 	},
+	-- Счётчик uid предметов; та же роль, что у petUidCounter.
+	itemUidCounter: number,
 	progress: ProfileProgress,
 	daily: ProfileDaily,
 	offline: ProfileOffline,
@@ -461,11 +613,17 @@ export type ProfileView = {
 	prisms: number,
 	endlessBest: number,
 	totalRuns: number,
+	-- Первый непройденный сюжетный уровень (M6): по нему панель у портала
+	-- решает, что уже открыто.
+	storyStage: number,
 }
 
 -- Итоги забега, собранные сервером из серверного же состояния.
 export type RunSummary = {
 	reason: RunEndReason,
+	mode: RunMode,
+	stageIndex: number, -- 0 в бесконечном режиме
+	victory: boolean, -- босс убит; в бесконечном режиме всегда false
 	time: number,
 	kills: number,
 	level: number,
@@ -475,6 +633,9 @@ export type RunSummary = {
 -- То же плюс начисленное; уходит на экран результатов (раздел 8 ТЗ).
 export type RunResult = {
 	reason: RunEndReason,
+	mode: RunMode,
+	stageIndex: number,
+	victory: boolean,
 	time: number,
 	kills: number,
 	level: number, -- уровень внутри забега, он не сохраняется
@@ -488,6 +649,9 @@ export type RunResult = {
 	metaLevel: number, -- уровень персонажа после начисления
 	levelsGained: number, -- сколько уровней взято за этот забег
 	talentPoints: number, -- нераспределённых очков после начисления
+
+	-- Выпавшая экипировка (M6). Только за победу на сюжетном уровне.
+	items: { ItemInstance },
 }
 
 -- Причина исчезновения врага; уходит на клиент одним байтом.

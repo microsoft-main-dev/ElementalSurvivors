@@ -73,22 +73,26 @@ local template: ProfileData = {
 	-- Одноразовые отметки: "стартовый питомец выдан" и далее по этапам.
 	flags = {},
 
-	-- Экипировка — M6, вместе с её выпадением.
+	-- Экипировка (M6): слот -> uid надетого предмета.
 	equipment = {},
 	inventory = {
 		items = {},
 		consumables = {},
 	},
+	itemUidCounter = 0,
 
 	progress = {
 		storyStage = 1,
 		endlessBest = 0,
 	},
 
+	-- Ежедневные квесты и колесо (M6). resetAt = 0 означает «набор ещё
+	-- не выдавался», и он будет собран при первом входе.
 	daily = {
 		lastWheelSpin = 0,
 		streak = 0,
 		quests = {},
+		resetAt = 0,
 	},
 
 	--[[

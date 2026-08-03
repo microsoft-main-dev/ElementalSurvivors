@@ -17,7 +17,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DataService = require(script.Parent.DataService)
+local ItemService = require(script.Parent.ItemService)
+local LeaderboardService = require(script.Parent.LeaderboardService)
+local QuestService = require(script.Parent.QuestService)
 local Rewards = require(Shared.Config.Rewards)
+local Stages = require(Shared.Config.Stages)
 local Types = require(Shared.Types)
 
 local RewardService = {}
@@ -37,9 +41,29 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		return nil
 	end
 
-	local essence = Rewards.EssenceForRun(summary.kills, summary.time)
+	--[[
+		Развилка режимов (раздел 5.1 ТЗ), M6.
+
+		Сюжетный уровень платит фиксированно по номеру уровня, а не по убийствам:
+		иначе выгоднее было бы бесконечно фармить один лёгкий уровень, вместо
+		того чтобы идти дальше. Проигранный сюжетный уровень даёт утешительную
+		долю пропорционально прожитому времени.
+
+		Бесконечный режим считается как раньше — по убийствам и времени.
+	]]
+	local essence: number
+	local xp: number
+
+	local stage = if summary.mode == "Story" then Stages.Get(summary.stageIndex) else nil
+	if stage then
+		essence, xp = Rewards.ForStage(stage, summary.victory, summary.time)
+	else
+		essence = Rewards.EssenceForRun(summary.kills, summary.time)
+		xp = Rewards.XpForRun(summary.kills, summary.time)
+	end
+
 	if essence > 0 then
-		DataService.AddCurrency(player, "essence", essence, `run:{summary.reason}`)
+		DataService.AddCurrency(player, "essence", essence, `run:{summary.mode}:{summary.reason}`)
 	end
 
 	--[[
@@ -47,10 +71,39 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		этот опыт сохраняется и превращается в очки талантов — правило
 		«уровень -> очко» живёт в DataService, здесь только начисление.
 	]]
-	local xp = Rewards.XpForRun(summary.kills, summary.time)
 	local levelsGained = if xp > 0 then DataService.AddMetaXp(player, xp) else 0
 
-	local _, newBest = DataService.RecordRun(player, summary.kills, summary.time)
+	--[[
+		Рекорд ставится только в бесконечном режиме: стенд рекордсменов —
+		это «топ по времени в бесконечном» (раздел 4 ТЗ), и сюжетный забег
+		фиксированной длины там не значит ничего.
+	]]
+	local _, newBest = DataService.RecordRun(player, summary.kills, summary.time, summary.mode == "Endless")
+	if newBest then
+		LeaderboardService.Submit(player, math.floor(summary.time))
+	end
+
+	--[[
+		Предметы (раздел 5.1 ТЗ) — только за победу. Проигранный уровень даёт
+		утешительную долю валюты и опыта, но ничего уникального: иначе фарм
+		поражений стал бы рабочей стратегией.
+	]]
+	local items: { Types.ItemInstance } = {}
+	if stage and summary.victory then
+		items = ItemService.GrantForStage(player, stage)
+	end
+
+	--[[
+		Ежедневные квесты (раздел 4 ТЗ): прогресс тикает из боёв. Записывается
+		после начисления, но до сейва — чтобы всё уходило в хранилище разом.
+	]]
+	QuestService.EnsureFresh(player)
+	QuestService.Record(player, "Kills", summary.kills)
+	QuestService.Record(player, "Runs", 1)
+	QuestService.Record(player, "Survive", math.floor(summary.time))
+	if summary.victory then
+		QuestService.Record(player, "StageClear", 1)
+	end
 
 	--[[
 		Сейв сразу после начисления, не дожидаясь автосейва. Автосейв закрывает
@@ -62,6 +115,9 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 
 	return {
 		reason = summary.reason,
+		mode = summary.mode,
+		stageIndex = summary.stageIndex,
+		victory = summary.victory,
 		time = summary.time,
 		kills = summary.kills,
 		level = summary.level,
@@ -74,6 +130,7 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		metaLevel = data.level,
 		levelsGained = levelsGained,
 		talentPoints = data.talentPoints,
+		items = items,
 	}
 end
 

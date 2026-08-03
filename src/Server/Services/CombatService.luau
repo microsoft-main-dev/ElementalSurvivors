@@ -29,13 +29,16 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AbilityService = require(script.Parent.AbilityService)
 local ArenaService = require(script.Parent.ArenaService)
 local Balance = require(Shared.Config.Balance)
+local BossService = require(script.Parent.BossService)
 local DataService = require(script.Parent.DataService)
 local EnemyService = require(script.Parent.EnemyService)
+local ItemService = require(script.Parent.ItemService)
 local Net = require(Shared.Net)
 local PetService = require(script.Parent.PetService)
 local PickupService = require(script.Parent.PickupService)
 local ProgressionService = require(script.Parent.ProgressionService)
 local RewardService = require(script.Parent.RewardService)
+local StageService = require(script.Parent.StageService)
 local TalentService = require(script.Parent.TalentService)
 local Types = require(Shared.Types)
 
@@ -47,6 +50,10 @@ export type RunStats = {
 type RunState = {
 	player: Player,
 	slot: number,
+	mode: Types.RunMode,
+	-- Номер сюжетного уровня; ноль в бесконечном режиме.
+	stageIndex: number,
+	victory: boolean,
 	humanoid: Humanoid,
 	lastHitAt: number,
 	snapshotTimer: number,
@@ -165,6 +172,10 @@ local function onHeartbeat(deltaTime: number): ()
 			if playerLocal then
 				AbilityService.Tick(run.slot, deltaTime, playerLocal)
 				PickupService.Tick(run.slot, deltaTime, playerLocal)
+				-- Фазы уровня и босс тикают здесь же: на паузе левел-апа
+				-- не должно двигаться вообще ничего боевого.
+				StageService.Tick(run.slot, deltaTime)
+				BossService.Tick(run.slot, deltaTime, playerLocal)
 			end
 		end
 
@@ -222,6 +233,9 @@ end
 local function buildSummary(run: RunState, reason: Types.RunEndReason): Types.RunSummary
 	return {
 		reason = reason,
+		mode = run.mode,
+		stageIndex = run.stageIndex,
+		victory = run.victory,
 		time = EnemyService.GetRunTime(run.slot),
 		kills = run.stats.kills,
 		level = ProgressionService.GetState(run.slot).level,
@@ -264,6 +278,8 @@ function CombatService.EndRun(player: Player, reason: Types.RunEndReason): ()
 	AbilityService.StopRun(run.slot)
 	PickupService.StopRun(run.slot)
 	ProgressionService.StopRun(run.slot)
+	StageService.StopRun(run.slot)
+	BossService.StopRun(run.slot)
 	ArenaService.Release(player)
 	runBySlot[run.slot] = nil
 	runs[player] = nil
@@ -288,8 +304,22 @@ function CombatService.EndRun(player: Player, reason: Types.RunEndReason): ()
 	end
 end
 
-function CombatService.BeginRun(player: Player): boolean
+--[[
+	Вход в бой. mode и stageIndex приходят с клиента (панель у портала),
+	поэтому проверяются здесь целиком: режим — из закрытого списка, номер
+	уровня — на право играть его, и только потом что-либо создаётся.
+]]
+function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex: number): boolean
 	if runs[player] then
+		return false
+	end
+
+	if mode ~= "Story" and mode ~= "Endless" then
+		return false
+	end
+
+	if mode == "Story" and not StageService.CanPlay(player, stageIndex) then
+		notify(player, "That stage is still locked.")
 		return false
 	end
 
@@ -332,6 +362,7 @@ function CombatService.BeginRun(player: Player): boolean
 	]]
 	local loadout = PetService.GetLoadout(player)
 	TalentService.Apply(player, loadout)
+	ItemService.Apply(player, loadout)
 	logLoadout(player, loadout)
 
 	humanoid.MaxHealth = loadout.maxHealth
@@ -343,6 +374,9 @@ function CombatService.BeginRun(player: Player): boolean
 	local run: RunState = {
 		player = player,
 		slot = slot,
+		mode = mode,
+		stageIndex = if mode == "Story" then stageIndex else 0,
+		victory = false,
 		humanoid = humanoid,
 		lastHitAt = 0,
 		snapshotTimer = 0,
@@ -387,7 +421,14 @@ function CombatService.BeginRun(player: Player): boolean
 		)
 	end
 
-	EnemyService.StartRun(slot, player, ArenaService.GetOrigin(slot), ArenaService.GetSeed(slot))
+	--[[
+		Сюжетный уровень собирается до старта симуляции: от него зависят
+		и масштаб врагов, и набор типов, и длительность фазы выживания.
+		В бесконечном режиме stage равен nil, и всё работает как до M6.
+	]]
+	local stage = if mode == "Story" then StageService.Begin(slot, player, stageIndex) else nil
+
+	EnemyService.StartRun(slot, player, ArenaService.GetOrigin(slot), ArenaService.GetSeed(slot), stage)
 	PickupService.StartRun(slot, player, loadout.magnetRadius)
 	ProgressionService.StartRun(slot, player)
 	AbilityService.StartRun(slot, player, loadout)
@@ -397,7 +438,7 @@ function CombatService.BeginRun(player: Player): boolean
 	-- с тем, что реально подобрано на сервере.
 	local remote = runStartedRemote
 	if remote then
-		remote:FireClient(player, slot, ArenaService.GetSeed(slot), loadout.magnetRadius)
+		remote:FireClient(player, slot, ArenaService.GetSeed(slot), loadout.magnetRadius, mode, run.stageIndex)
 	end
 	sendSnapshot(run)
 
@@ -472,8 +513,28 @@ end
 function CombatService.Start(): ()
 	EnemyService.SetContactHandler(onContact)
 	EnemyService.SetDeathHandler(onEnemyDeath)
+	-- Урон от босса идёт тем же путём, что и от врагов: те же i-frames,
+	-- иначе игрок получал бы два удара одновременно с разных сторон.
+	BossService.SetContactHandler(onContact)
 	PickupService.SetCollectHandler(onCrystalCollected)
 	RunService.Heartbeat:Connect(onHeartbeat)
+
+	--[[
+		Победа над боссом. Задержка перед выходом небольшая, но нужна:
+		мгновенный экран результатов поверх смерти босса не даёт увидеть,
+		что вообще произошло.
+	]]
+	StageService.SetVictoryHandler(function(_slot: number, player: Player)
+		local run = runs[player]
+		if not run or run.ending then
+			return
+		end
+		run.victory = true
+		notify(player, "Boss defeated!")
+		task.delay(Balance.Combat.deathReturnDelay, function()
+			CombatService.EndRun(player, "Victory")
+		end)
+	end)
 
 	--[[
 		Забег, прерванный выходом игрока или выключением сервера, всё равно

@@ -15,6 +15,9 @@
 	поэтому любой забег считается по одной формуле.
 ]]
 
+local Balance = require(script.Parent.Balance)
+local Types = require(script.Parent.Parent.Types)
+
 local Rewards = {
 	Essence = table.freeze({
 		perKill = 1, -- за каждого убитого врага
@@ -56,6 +59,33 @@ end
 function Rewards.XpForRun(kills: number, time: number): number
 	local xp = kills * Rewards.Xp.perKill + (time / 60) * Rewards.Xp.perMinute
 	return math.floor(xp)
+end
+
+--[[
+	Награда за сюжетный уровень (раздел 5.1 ТЗ), M6.
+
+	Здесь награда НЕ зависит от убийств и времени: за уровень платят фиксированно,
+	по номеру уровня, и числа приходят готовыми из Stages.Get(index). Иначе
+	выгоднее было бы фармить один и тот же лёгкий уровень подольше, вместо того
+	чтобы идти дальше.
+
+	Возвращает (Essence, опыт).
+]]
+function Rewards.ForStage(stage: Types.StageDef, victory: boolean, timeSurvived: number): (number, number)
+	if victory then
+		return stage.essence, stage.xp
+	end
+
+	--[[
+		Поражение: доля от полной награды, пропорционально прожитому времени
+		(раздел 5.1 ТЗ). Только Essence и опыт — ни предметов, ни Prisms.
+		Смысл в том, чтобы неудачные пятнадцать минут не ощущались потерянными,
+		но и не стали работающей стратегией фарма: доля мала, а уровень
+		при этом не засчитывается.
+	]]
+	local fraction = math.clamp(timeSurvived / stage.duration, 0, 1) * Balance.Stages.defeatFraction
+
+	return math.floor(stage.essence * fraction), math.floor(stage.xp * fraction)
 end
 
 return table.freeze(Rewards)

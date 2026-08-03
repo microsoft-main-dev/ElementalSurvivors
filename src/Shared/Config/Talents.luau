@@ -30,6 +30,7 @@
 		Talents.RootId               -> string
 ]]
 
+local Elements = require(script.Parent.Elements)
 local Types = require(script.Parent.Parent.Types)
 
 type Element = Types.Element
@@ -40,11 +41,8 @@ local Talents = {}
 
 Talents.RootId = "Core"
 
---[[
-	Порядок стихий задаёт и расположение ветвей по кругу, и цвета в панели.
-	Он же используется в Config/Abilities и Config/Pets — список один на проект.
-]]
-local ELEMENTS: { Element } = { "Fire", "Ice", "Lightning", "Nature", "Dark", "Light" }
+-- Порядок стихий задаёт расположение ветвей по кругу. Список один на проект.
+local ELEMENTS: { Element } = Elements.List
 
 --[[
 	Форма одной ветви: пять узлов подряд, от центра наружу.

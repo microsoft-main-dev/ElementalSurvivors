@@ -27,12 +27,15 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CombatService = require(script.Parent.CombatService)
 local DataService = require(script.Parent.DataService)
 local EggService = require(script.Parent.EggService)
+local ItemService = require(script.Parent.ItemService)
 local Net = require(Shared.Net)
 local OfflineService = require(script.Parent.OfflineService)
 local PetService = require(script.Parent.PetService)
+local QuestService = require(script.Parent.QuestService)
 local RateLimiter = require(Shared.Util.RateLimiter)
 local TalentService = require(script.Parent.TalentService)
 local Types = require(Shared.Types)
+local WheelService = require(script.Parent.WheelService)
 
 --[[
 	Лимит: 12 действий за 3 секунды. Заметно выше, чем успевает нажать человек
@@ -69,6 +72,10 @@ local ALLOWED_ACTIONS: { Types.LobbyAction } = {
 	"ClaimOffline",
 	"SpendTalent",
 	"ResetTalents",
+	"EnterRun",
+	"SpinWheel",
+	"ClaimQuest",
+	"EquipItem",
 	"Refresh",
 }
 
@@ -131,12 +138,33 @@ local function handle(player: Player, action: string, target: string?, extra: un
 	if action == "Refresh" then
 		PetService.PushView(player)
 		TalentService.PushView(player)
+		ItemService.PushView(player)
+		-- Сутки могли смениться, пока игрок был в бою.
+		QuestService.EnsureFresh(player)
+		QuestService.PushView(player)
 		DataService.PushView(player)
 		return
 	end
 
 	if action == "ResetTalents" then
 		local _, message = TalentService.Reset(player)
+		notify(player, message)
+		return
+	end
+
+	--[[
+		Вход в бой. Режим и номер уровня приходят с клиента и проверяются
+		целиком внутри CombatService: право играть уровень, свободный слот,
+		кулдаун входа. Здесь только разбор аргументов.
+	]]
+	if action == "EnterRun" then
+		local mode: Types.RunMode = if target == "Story" then "Story" else "Endless"
+		CombatService.BeginRun(player, mode, readCount(extra))
+		return
+	end
+
+	if action == "SpinWheel" then
+		local _, message = WheelService.Spin(player)
 		notify(player, message)
 		return
 	end
@@ -194,6 +222,18 @@ local function handle(player: Player, action: string, target: string?, extra: un
 	if action == "SpendTalent" then
 		local _, message = TalentService.Spend(player, target)
 		notify(player, message)
+		return
+	end
+
+	if action == "EquipItem" then
+		local _, message = ItemService.Equip(player, target)
+		notify(player, message)
+		return
+	end
+
+	if action == "ClaimQuest" then
+		local _, message = QuestService.Claim(player, target)
+		notify(player, message)
 	end
 end
 
@@ -235,8 +275,12 @@ local function onPlayerAdded(player: Player): ()
 
 	PetService.GrantStarterIfNeeded(player)
 	OfflineService.Accrue(player)
+	QuestService.EnsureFresh(player)
+
 	PetService.PushView(player)
 	TalentService.PushView(player)
+	ItemService.PushView(player)
+	QuestService.PushView(player)
 	OfflineService.PushReport(player)
 end
 

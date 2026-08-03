@@ -18,6 +18,7 @@ local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
+local BossRenderController = require(script.Parent.BossRenderController)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
 local Types = require(Shared.Types)
@@ -56,6 +57,11 @@ local icons: { [string]: Icon } = {}
 
 local snapshot: Types.RunSnapshot? = nil
 local healthConnection: RBXScriptConnection? = nil
+
+-- Боссфайт (M6): полоса здоровья и подпись фазы.
+local bossBar: Frame? = nil
+local bossFill: Frame? = nil
+local phaseLabel: TextLabel? = nil
 
 local function makeBar(parent: Instance, name: string, color: Color3): (Frame, Frame)
 	local track = Instance.new("Frame")
@@ -125,6 +131,27 @@ local function build(): ()
 	timer.Position = UDim2.new(0.5, 0, 0, 30)
 	timer.Size = UDim2.fromOffset(140, 30)
 	timerLabel = timer
+
+	--[[
+		Полоса здоровья босса и подпись фазы (M6). Висят под таймером
+		и появляются только тогда, когда есть о чём говорить: пустая полоса
+		весь забег занимала бы место и приучала на неё не смотреть.
+	]]
+	local bossTrack, bossFillFrame = makeBar(gui, "BossHealth", Palette.UI.danger)
+	bossTrack.AnchorPoint = Vector2.new(0.5, 0)
+	bossTrack.Position = UDim2.new(0.5, 0, 0, 62)
+	bossTrack.Size = UDim2.new(0.5, 0, 0, 12)
+	bossTrack.Visible = false
+	bossBar = bossTrack
+	bossFill = bossFillFrame
+
+	local phase = makeLabel(gui, "Phase", 15)
+	phase.AnchorPoint = Vector2.new(0.5, 0)
+	phase.Position = UDim2.new(0.5, 0, 0, 78)
+	phase.Size = UDim2.fromOffset(320, 20)
+	phase.TextColor3 = Palette.UI.subtext
+	phase.Visible = false
+	phaseLabel = phase
 
 	local kills = makeLabel(gui, "Kills", 16)
 	kills.AnchorPoint = Vector2.new(1, 0)
@@ -345,6 +372,25 @@ local function updateHealth(): ()
 	label.Text = `{math.ceil(humanoid.Health)} / {math.floor(humanoid.MaxHealth)}`
 end
 
+--[[
+	Полоса босса. Доля здоровья берётся у BossRenderController — он и так
+	получает состояние босса десять раз в секунду, и второй канал ради
+	одной цифры был бы лишним.
+]]
+local function updateBoss(): ()
+	local bar = bossBar
+	local fill = bossFill
+	if not bar or not fill then
+		return
+	end
+
+	local active = BossRenderController.IsActive()
+	bar.Visible = active
+	if active then
+		fill.Size = UDim2.fromScale(BossRenderController.GetHealthFraction(), 1)
+	end
+end
+
 local function onHeartbeat(deltaTime: number): ()
 	local gui = screen
 	local current = snapshot
@@ -396,6 +442,7 @@ local function onHeartbeat(deltaTime: number): ()
 
 	updateDamageMeter(current.abilities)
 	updateHealth()
+	updateBoss()
 end
 
 local function setVisible(visible: boolean): ()
@@ -406,6 +453,16 @@ local function setVisible(visible: boolean): ()
 
 	if not visible then
 		snapshot = nil
+
+		local bar = bossBar
+		if bar then
+			bar.Visible = false
+		end
+		local label = phaseLabel
+		if label then
+			label.Visible = false
+		end
+
 		for key, icon in icons do
 			icon.holder:Destroy()
 			icons[key] = nil
@@ -430,6 +487,29 @@ function HudController.Start(): ()
 
 	Net.GetUnreliable(Net.Id.RunSnapshot).OnClientEvent:Connect(function(value: Types.RunSnapshot)
 		snapshot = value
+	end)
+
+	--[[
+		Подпись фазы сюжетного уровня (M6). Без неё момент, когда спавн
+		прекратился и надо добить оставшихся, выглядит как «враги кончились
+		и игра сломалась».
+	]]
+	Net.GetEvent(Net.Id.StagePhase).OnClientEvent:Connect(function(payload: { [string]: any })
+		local label = phaseLabel
+		if not label then
+			return
+		end
+
+		local phase = payload.phase
+		if phase == "Sweep" then
+			label.Text = "Clear the field — the boss is waiting"
+			label.Visible = true
+		elseif phase == "Boss" then
+			label.Text = "BOSS"
+			label.Visible = true
+		else
+			label.Visible = false
+		end
 	end)
 
 	-- Полоса здоровья обновляется и по событию, и в цикле: событие даёт

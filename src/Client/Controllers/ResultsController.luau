@@ -252,13 +252,24 @@ local function show(result: Types.RunResult): ()
 
 	local title = titleLabel
 	if title then
-		title.Text = if result.reason == "Death" then "YOU DIED" else "RUN ENDED"
-		title.TextColor3 = if result.reason == "Death" then Palette.UI.danger else Palette.UI.text
+		if result.victory then
+			title.Text = "STAGE CLEARED"
+			title.TextColor3 = Palette.Element.Nature
+		elseif result.reason == "Death" then
+			title.Text = "YOU DIED"
+			title.TextColor3 = Palette.UI.danger
+		else
+			title.Text = "RUN ENDED"
+			title.TextColor3 = Palette.UI.text
+		end
 	end
 
 	local summary = summaryLabel
 	if summary then
-		summary.Text = `Time {formatTime(result.time)}   ·   Kills {result.kills}   ·   Level {result.level}`
+		-- В сюжетном режиме номер уровня важнее внутрибоевого уровня:
+		-- он говорит, где игрок находится в прогрессе, а не в этом забеге.
+		local prefix = if result.mode == "Story" then `Stage {result.stageIndex}   ·   ` else ""
+		summary.Text = `{prefix}Time {formatTime(result.time)}   ·   Kills {result.kills}   ·   Level {result.level}`
 	end
 
 	-- Сортировка по урону: первым идёт то, что реально несло забег.
@@ -286,6 +297,17 @@ local function show(result: Types.RunResult): ()
 			local points = if result.levelsGained == 1 then "point" else "points"
 			text ..= `   ·   +{result.levelsGained} talent {points}`
 		end
+
+		-- Выпавшая экипировка (M6). Перечисляется поимённо: «+1 предмет»
+		-- заставляет лезть в инвентарь, чтобы узнать, что именно дали.
+		if #result.items > 0 then
+			local names: { string } = {}
+			for _, item in result.items do
+				table.insert(names, `{item.rarity} {item.slot}`)
+			end
+			text ..= `   ·   {table.concat(names, ", ")}`
+		end
+
 		meta.Text = text
 	end
 

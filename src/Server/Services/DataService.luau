@@ -43,6 +43,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local Items = require(Shared.Config.Items)
 local Net = require(Shared.Net)
 local Pets = require(Shared.Config.Pets)
 local ProfileSchema = require(script.Parent.Parent.Lib.ProfileSchema)
@@ -122,6 +123,7 @@ function DataService.PushView(player: Player): ()
 		prisms = data.currency.prisms,
 		endlessBest = data.progress.endlessBest,
 		totalRuns = data.stats.totalRuns,
+		storyStage = data.progress.storyStage,
 	}
 	remote:FireClient(player, view)
 end
@@ -209,7 +211,12 @@ end
 	Итоги забега в статистику профиля.
 	Возвращает (записано ли, стало ли время рекордом).
 ]]
-function DataService.RecordRun(player: Player, kills: number, duration: number): (boolean, boolean)
+function DataService.RecordRun(
+	player: Player,
+	kills: number,
+	duration: number,
+	countAsBest: boolean
+): (boolean, boolean)
 	local data = DataService.GetProfile(player)
 	if not data then
 		return false, false
@@ -229,7 +236,13 @@ function DataService.RecordRun(player: Player, kills: number, duration: number):
 	stats.totalKills += kills
 	stats.playtime += seconds
 
-	local newBest = seconds > data.progress.endlessBest
+	--[[
+		Рекорд обновляется только там, где он что-то значит. endlessBest —
+		это лучшее время В БЕСКОНЕЧНОМ режиме (раздел 4 ТЗ), и сюжетный забег
+		фиксированной длины не должен туда попадать: иначе стенд рекордсменов
+		превратится в список тех, кто дольше всех проходил длинный уровень.
+	]]
+	local newBest = countAsBest and seconds > data.progress.endlessBest
 	if newBest then
 		data.progress.endlessBest = seconds
 	end
@@ -457,6 +470,192 @@ function DataService.ResetTalents(player: Player): number
 		`[DataService] {player.Name} сбросил дерево талантов, возвращено очков: {refunded}`
 	)
 	return refunded
+end
+
+--[[
+	Экипировка (раздел 6.1 ТЗ), M6.
+
+	Инвентарь ограничен потолком не ради интерфейса, а ради профиля:
+	неограниченный список однажды упрётся в лимит размера данных DataStore,
+	и упрётся молча. При переполнении вытесняется самый слабый НЕ надетый
+	предмет — надетое трогать нельзя, иначе игрок лишится того, чем играет.
+
+	Возвращает uid или nil, если положить было некуда.
+]]
+function DataService.AddItem(player: Player, item: Types.ItemInstance): string?
+	local data = DataService.GetProfile(player)
+	if not data then
+		return nil
+	end
+
+	local items = data.inventory.items
+
+	if #items >= Balance.Items.maxItems then
+		local worstIndex, worstPower = nil :: number?, math.huge
+
+		for index, candidate in items do
+			local isEquipped = data.equipment[candidate.slot] == candidate.uid
+			if not isEquipped then
+				local power = Items.Power(candidate)
+				if power < worstPower then
+					worstIndex, worstPower = index, power
+				end
+			end
+		end
+
+		if not worstIndex then
+			-- Всё надето и всё занято: класть некуда, но и выбрасывать нечего.
+			return nil
+		end
+
+		table.remove(items, worstIndex)
+	end
+
+	data.itemUidCounter += 1
+	local uid = `i{data.itemUidCounter}`
+	item.uid = uid
+	table.insert(items, item)
+
+	print(`[DataService] {player.Name} получил предмет {item.rarity} {item.slot} (uid {uid})`)
+	return uid
+end
+
+--[[
+	Надеть предмет. Пустой uid снимает то, что надето в этом слоте.
+]]
+function DataService.SetEquippedItem(player: Player, slot: string, uid: string): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	if uid == "" then
+		data.equipment[slot] = nil
+		return true
+	end
+
+	for _, item in data.inventory.items do
+		if item.uid == uid then
+			-- Слот берётся у предмета, а не с клиента: иначе шлем можно было бы
+			-- надеть в слот ботинок и получить бонусы дважды.
+			data.equipment[item.slot] = uid
+			return true
+		end
+	end
+
+	return false
+end
+
+--[[
+	Ежедневные квесты и колесо (раздел 4 ТЗ), M6.
+
+	Набор заданий хранится в профиле целиком: правка Config/Quests не должна
+	менять условия у задания, которое игрок уже начал выполнять сегодня.
+]]
+function DataService.SetDailyQuests(player: Player, quests: { Types.ProfileQuest }, resetAt: number): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	data.daily.quests = quests
+	data.daily.resetAt = resetAt
+	return true
+end
+
+-- Прогресс квеста. Больше цели не копится: лишние единицы ничего не значат.
+function DataService.AddQuestProgress(player: Player, kind: Types.QuestKind, amount: number): boolean
+	if amount <= 0 then
+		return false
+	end
+
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local changed = false
+	for _, quest in data.daily.quests do
+		if quest.kind == kind and not quest.claimed and quest.progress < quest.target then
+			quest.progress = math.min(quest.progress + amount, quest.target)
+			changed = true
+		end
+	end
+
+	return changed
+end
+
+--[[
+	Забрать награду за квест. Отметка ставится ДО начисления по той же причине,
+	что и у копилки экспедиций: неудачное начисление лучше, чем невыбранная
+	отметка при удачном.
+]]
+function DataService.ClaimQuest(player: Player, questId: string): number
+	local data = DataService.GetProfile(player)
+	if not data then
+		return 0
+	end
+
+	for _, quest in data.daily.quests do
+		if quest.id == questId then
+			if quest.claimed or quest.progress < quest.target then
+				return 0
+			end
+
+			quest.claimed = true
+			if DataService.AddCurrency(player, "essence", quest.essence, `quest:{questId}`) then
+				return quest.essence
+			end
+			return 0
+		end
+	end
+
+	return 0
+end
+
+--[[
+	Прокрутка колеса. Отметка времени сдвигается в той же операции, что и выдача,
+	и до неё — ровно как у экспедиций: любой путь, где приз выдан, а отметка
+	осталась старой, даёт бесконечные бесплатные прокрутки.
+]]
+function DataService.ClaimWheel(player: Player, essence: number): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	data.daily.lastWheelSpin = os.time()
+	data.daily.streak += 1
+
+	return DataService.AddCurrency(player, "essence", essence, "wheel:daily")
+end
+
+--[[
+	Открыть следующий сюжетный уровень (раздел 5.1 ТЗ), M6.
+
+	Только вперёд и только на один шаг: storyStage — это «первый непройденный»,
+	и уменьшать его нельзя ни при каких обстоятельствах. Повторное прохождение
+	уже пройденного уровня ничего не открывает и профиль не меняет.
+]]
+function DataService.AdvanceStoryStage(player: Player, clearedIndex: number): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	if not isSaneAmount(clearedIndex) or clearedIndex < 1 then
+		return false
+	end
+
+	if clearedIndex < data.progress.storyStage then
+		return false
+	end
+
+	data.progress.storyStage = clearedIndex + 1
+	print(
+		`[DataService] {player.Name} прошёл уровень {clearedIndex}, открыт {data.progress.storyStage}`
+	)
+	return true
 end
 
 --[[

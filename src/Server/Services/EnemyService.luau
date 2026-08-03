@@ -19,13 +19,16 @@
 	а математика — чистой и готовой к переносу в parallel Luau.
 
 	Публичный API:
-		EnemyService.StartRun(slot, player)
+		EnemyService.StartRun(slot, player, origin, seed, stage?)
 		EnemyService.StopRun(slot)
 		EnemyService.Damage(slot, id, amount)              -> boolean  (true = убит)
 		EnemyService.Collect(slot, localPosition, radius, out) -> count
 		EnemyService.GetAliveCount(slot)                   -> number
 		EnemyService.GetRunTime(slot)                      -> number
 		EnemyService.SetContactHandler(fn)                 -- урон игроку от касания
+		EnemyService.SetSpawnEnabled(slot, enabled)        -- конец фазы выживания
+		EnemyService.SetSweeping(slot, sweeping)           -- стягивание оставшихся
+		EnemyService.ClearAll(slot)                        -> number   (убрано молча)
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -55,6 +58,31 @@ type Sim = {
 	time: number,
 	accumulator: number,
 	paused: boolean, -- забег на паузе из-за выбора карточки левел-апа
+
+	--[[
+		Масштаб от номера сюжетного уровня (раздел 5.1 ТЗ). В бесконечном режиме
+		все три равны единице. Множители лежат в симуляции, а не применяются
+		к таблице врагов: Config/Enemies один на все уровни и правиться от
+		номера уровня не должен.
+	]]
+	healthMult: number,
+	damageMult: number,
+	speedMult: number,
+
+	-- Список врагов уровня. Пустой означает «брать из расписания волн».
+	enemyTypes: { string },
+
+	--[[
+		Спавн выключается в конце фазы выживания: босс выходит на пустую арену
+		(решение владельца). Пока spawnEnabled = false, новых врагов не появляется.
+	]]
+	spawnEnabled: boolean,
+
+	--[[
+		Фаза добивания. Оставшиеся стягиваются к игроку с повышенной скоростью,
+		иначе один враг, застрявший за колонной, подвесил бы забег навсегда.
+	]]
+	sweeping: boolean,
 
 	-- Structure of Arrays
 	positions: { Vector3 },
@@ -180,19 +208,26 @@ local function release(sim: Sim, id: number, reason: number): ()
 	pushEvent(sim, Packet.Kind.Despawn, id, reason, 0, 0)
 end
 
-local function spawnOne(sim: Sim, def: EnemyDef, playerLocal: Vector3): ()
+--[[
+	Появление одного врага вокруг точки center на расстоянии radius.
+
+	Обычный спавн зовёт это с позицией игрока и большим радиусом — «по окружности
+	чуть больше видимой области, никогда в кадре». Призыв босса зовёт с позицией
+	босса и маленьким: призванные обязаны появиться рядом с ним, иначе призыв
+	не читается как его действие.
+]]
+local function spawnOne(sim: Sim, def: EnemyDef, center: Vector3, radius: number): ()
 	local id = allocate(sim)
 	if not id then
 		return
 	end
 
-	-- Спавн по окружности радиусом чуть больше видимой области — никогда в кадре.
 	local direction = sim.rng.NextUnitVector()
-	local position = EnemyMotion.ClampToArena(playerLocal + direction * Balance.Combat.spawnRadius, Balance.Arena.size)
+	local position = EnemyMotion.ClampToArena(center + direction * radius, Balance.Arena.size)
 
 	sim.positions[id] = position
 	sim.nextPositions[id] = position
-	sim.hp[id] = def.stats.health
+	sim.hp[id] = def.stats.health * sim.healthMult
 	sim.typeId[id] = def.typeId
 	sim.phase[id] = sim.rng.NextNumber(0, 6.28)
 	sim.alive[id] = true
@@ -202,6 +237,13 @@ local function spawnOne(sim: Sim, def: EnemyDef, playerLocal: Vector3): ()
 end
 
 local function spawnStep(sim: Sim, dt: number, playerLocal: Vector3): ()
+	-- Конец фазы выживания: новых врагов больше не появляется, арена
+	-- расчищается под боссфайт.
+	if not sim.spawnEnabled then
+		sim.spawnCredit = 0
+		return
+	end
+
 	local wave = currentWave(sim)
 	if sim.aliveCount >= wave.maxAlive then
 		sim.spawnCredit = 0
@@ -210,14 +252,47 @@ local function spawnStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 
 	sim.spawnCredit += wave.spawnRate * dt
 
+	-- Набор врагов задаёт локация, если она есть; иначе расписание волн.
+	local types = if #sim.enemyTypes > 0 then sim.enemyTypes else wave.types
+
 	while sim.spawnCredit >= 1 and sim.aliveCount < wave.maxAlive do
 		sim.spawnCredit -= 1
-		local key = sim.rng.NextChoice(wave.types)
+		local key = sim.rng.NextChoice(types)
 		local def = Enemies.ByKey[key]
 		if def then
-			spawnOne(sim, def, playerLocal)
+			spawnOne(sim, def, playerLocal, Balance.Combat.spawnRadius)
 		end
 	end
+end
+
+--[[
+	Призыв пачки врагов вокруг точки — атака Summon у босса.
+
+	Потолок живых соблюдается: призыв не должен пробивать ограничение,
+	на котором держится производительность.
+]]
+function EnemyService.SpawnBurst(slot: number, center: Vector3, count: number, radius: number): number
+	local sim = sims[slot]
+	if not sim then
+		return 0
+	end
+
+	local wave = currentWave(sim)
+	local types = if #sim.enemyTypes > 0 then sim.enemyTypes else wave.types
+	local spawned = 0
+
+	for _ = 1, count do
+		if sim.aliveCount >= wave.maxAlive then
+			break
+		end
+		local def = Enemies.ByKey[sim.rng.NextChoice(types)]
+		if def then
+			spawnOne(sim, def, center, radius)
+			spawned += 1
+		end
+	end
+
+	return spawned
 end
 
 local function moveStep(sim: Sim, dt: number, playerLocal: Vector3): ()
@@ -234,12 +309,22 @@ local function moveStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 	local separationStrength = Balance.Combat.separationStrength
 	local arenaSize = Balance.Arena.size
 
+	--[[
+		В фазе добивания оставшиеся идут к игроку заметно быстрее. Это не
+		сложность, а страховка: босс ждёт пустой арены, и враг, застрявший
+		в дальнем углу за колонной, иначе остановил бы забег насовсем.
+	]]
+	local speedMult = sim.speedMult
+	if sim.sweeping then
+		speedMult *= Balance.Stages.sweepSpeedMult
+	end
+
 	for id = 1, sim.highWater do
 		if alive[id] then
 			local def = Enemies.List[typeIds[id]]
 			local position = positions[id]
 
-			position = EnemyMotion.Chase(position, playerLocal, def.stats.speed, dt)
+			position = EnemyMotion.Chase(position, playerLocal, def.stats.speed * speedMult, dt)
 
 			local count = hash.Collect(position, separationRadius, neighbours)
 			position = EnemyMotion.Separation(
@@ -313,7 +398,7 @@ local function contactStep(sim: Sim, playerLocal: Vector3): ()
 	end
 
 	if worst > 0 then
-		handler(sim.player, worst)
+		handler(sim.player, worst * sim.damageMult)
 	end
 end
 
@@ -499,7 +584,11 @@ local function buildObstacles(seed: number): (SpatialHash.SpatialHash, { Vector3
 	return hash, positions, radii, maxRadius
 end
 
-function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, seed: number): ()
+--[[
+	Начало забега. stage равен nil в бесконечном режиме: тогда враги
+	не масштабируются и набор берётся из расписания волн.
+]]
+function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, seed: number, stage: Types.StageDef?): ()
 	local obstacleHash, obstaclePositions, obstacleRadii, obstacleQueryRadius = buildObstacles(seed)
 
 	local sim: Sim = {
@@ -512,6 +601,14 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		time = 0,
 		accumulator = 0,
 		paused = false,
+
+		healthMult = if stage then stage.enemyHealthMult else 1,
+		damageMult = if stage then stage.enemyDamageMult else 1,
+		speedMult = if stage then stage.enemySpeedMult else 1,
+		enemyTypes = if stage then stage.enemyTypes else {},
+
+		spawnEnabled = true,
+		sweeping = false,
 
 		positions = table.create(CAPACITY, Vector3.zero),
 		nextPositions = table.create(CAPACITY, Vector3.zero),
@@ -556,6 +653,55 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 	end
 
 	sims[slot] = sim
+end
+
+--[[
+	Управление фазами сюжетного забега (раздел 5.1 ТЗ).
+
+	Босс выходит на пустую арену, поэтому фаза выживания заканчивается
+	остановкой спавна, а не мгновенной зачисткой: оставшихся игрок добивает сам.
+]]
+function EnemyService.SetSpawnEnabled(slot: number, enabled: boolean): ()
+	local sim = sims[slot]
+	if sim then
+		sim.spawnEnabled = enabled
+		if not enabled then
+			sim.spawnCredit = 0
+		end
+	end
+end
+
+-- Стягивание оставшихся к игроку: см. комментарий про застрявших в moveStep.
+function EnemyService.SetSweeping(slot: number, sweeping: boolean): ()
+	local sim = sims[slot]
+	if sim then
+		sim.sweeping = sweeping
+	end
+end
+
+--[[
+	Принудительно убрать всех живых. Последний рубеж страховки: если враг
+	недостижим даже после стягивания (баг в обходе колонн, мёртвая зона),
+	забег обязан продолжиться, а не зависнуть навсегда.
+
+	Уходит причиной Culled — это исчезновение, а не убийство: ни опыта,
+	ни кристаллов за него не даётся.
+]]
+function EnemyService.ClearAll(slot: number): number
+	local sim = sims[slot]
+	if not sim then
+		return 0
+	end
+
+	local removed = 0
+	for id = 1, sim.highWater do
+		if sim.alive[id] then
+			release(sim, id, Packet.Reason.Culled)
+			removed += 1
+		end
+	end
+
+	return removed
 end
 
 function EnemyService.StopRun(slot: number): ()

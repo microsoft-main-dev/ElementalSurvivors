@@ -37,6 +37,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
 local Balance = require(Shared.Config.Balance)
+local BossService = require(script.Parent.BossService)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
 local Types = require(Shared.Types)
@@ -115,6 +116,28 @@ local function releaseProjectile(sim: Sim, id: number): ()
 	sim.projFree[sim.projFreeCount] = id
 end
 
+--[[
+	Ключ босса в таблице hitTimes. Id врагов начинаются с единицы, поэтому ноль
+	свободен — отдельная таблица под одну запись была бы лишней сущностью.
+]]
+local BOSS_HIT_KEY = 0
+
+--[[
+	Урон боссу от области способности.
+
+	Босс проверяется отдельным вызовом, а не живёт в общих массивах врагов:
+	массивы там ради сотен сущностей, а босс на арене один. Но путь урона общий
+	с врагами по форме — если бы у босса был свой, половина форм однажды
+	перестала бы его задевать.
+]]
+local function damageBoss(sim: Sim, runtime: Runtime, position: Vector3, radius: number, damage: number): ()
+	if not BossService.CollectHit(sim.slot, position, radius) then
+		return
+	end
+	local _, dealt = BossService.Damage(sim.slot, damage)
+	runtime.damage += dealt
+end
+
 local function sendFx(sim: Sim, kind: string, key: string, count: number): ()
 	local remote = fxRemote
 	if not remote or count == 0 then
@@ -161,6 +184,16 @@ local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Ve
 		local angle = runtime.phase + step * index
 		local orb = playerLocal + Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
 
+		-- У босса своя отметка повторного удара: он один, а орбов несколько,
+		-- и без неё каждый орб бил бы его каждый кадр.
+		local lastBossHit = hitTimes[BOSS_HIT_KEY]
+		if lastBossHit == nil or now - lastBossHit >= repeatDelay then
+			if BossService.CollectHit(sim.slot, orb, hitRadius) then
+				hitTimes[BOSS_HIT_KEY] = now
+				damageBoss(sim, runtime, orb, hitRadius, damage)
+			end
+		end
+
 		local hits = EnemyService.CollectHits(sim.slot, orb, hitRadius, sim.hits)
 		for hitIndex = 1, hits do
 			local enemyId = sim.hits[hitIndex]
@@ -178,22 +211,26 @@ end
 local function tickAura(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 	local data = runtime.def.levels[runtime.level]
 	local damage = data.damage * runtime.damageMult
-	local hits = EnemyService.CollectHits(sim.slot, playerLocal, data.radius :: number, sim.hits)
+	local radius = data.radius :: number
+	local hits = EnemyService.CollectHits(sim.slot, playerLocal, radius, sim.hits)
 	for index = 1, hits do
 		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], damage)
 		runtime.damage += dealt
 	end
+	damageBoss(sim, runtime, playerLocal, radius, damage)
 end
 
 -- Nova — то же по геометрии, но разовая вспышка, и клиент рисует волну.
 local function tickNova(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 	local data = runtime.def.levels[runtime.level]
 	local damage = data.damage * runtime.damageMult
-	local hits = EnemyService.CollectHits(sim.slot, playerLocal, data.radius :: number, sim.hits)
+	local radius = data.radius :: number
+	local hits = EnemyService.CollectHits(sim.slot, playerLocal, radius, sim.hits)
 	for index = 1, hits do
 		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], damage)
 		runtime.damage += dealt
 	end
+	damageBoss(sim, runtime, playerLocal, radius, damage)
 
 	sim.fxQueue[1] = { x = playerLocal.X, z = playerLocal.Z, dx = 0, dz = 0 }
 	sendFx(sim, "Nova", runtime.def.key, 1)
@@ -273,6 +310,24 @@ local function stepProjectiles(sim: Sim, dt: number): ()
 			local position = sim.projPosition[id] + sim.projDirection[id] * (sim.projSpeed[id] * dt)
 			sim.projPosition[id] = position
 
+			--[[
+				Босс проверяется первым и снимает пробойность так же, как враг:
+				снаряд с pierce = 3 обязан застревать в боссе, а не пролетать
+				сквозь него, потому что тот не лежит в общих массивах.
+			]]
+			local owner = sim.projOwner[id]
+			if owner and BossService.CollectHit(sim.slot, position, sim.projHitRadius[id]) then
+				local _, dealt = BossService.Damage(sim.slot, sim.projDamage[id])
+				owner.damage += dealt
+
+				local pierce = sim.projPierce[id] - 1
+				sim.projPierce[id] = pierce
+				if pierce <= 0 then
+					releaseProjectile(sim, id)
+					continue
+				end
+			end
+
 			local hits = EnemyService.CollectHits(sim.slot, position, sim.projHitRadius[id], sim.hits)
 			for index = 1, hits do
 				local enemyId = sim.hits[index]
@@ -280,7 +335,6 @@ local function stepProjectiles(sim: Sim, dt: number): ()
 				-- с pierce = 3 выжигал бы всю пробойность об одну цель.
 				if enemyId ~= sim.projLastHit[id] then
 					local _, dealt = EnemyService.Damage(sim.slot, enemyId, sim.projDamage[id])
-					local owner = sim.projOwner[id]
 					if owner then
 						owner.damage += dealt
 					end
