@@ -28,6 +28,20 @@ local Palette = {
 		Light = Color3.fromHex("#F2EFDF"),
 	}),
 
+	--[[
+		Редкости питомцев (раздел 6 ТЗ). Цвет — единственный способ отличить
+		редкость с одного взгляда: иконок у нас нет, а подпись читается медленнее.
+		Шкала намеренно идёт от блёклого к яркому, а не «каждой редкости свой
+		случайный цвет»: так порядок виден даже тому, кто впервые видит буквы.
+	]]
+	Rarity = table.freeze({
+		B = Color3.fromHex("#8A9A92"),
+		A = Color3.fromHex("#5FC8E8"),
+		S = Color3.fromHex("#6FBF52"),
+		SS = Color3.fromHex("#E8CE4B"),
+		SSS = Color3.fromHex("#E2603A"),
+	}),
+
 	-- Лобби
 	Lobby = table.freeze({
 		floor = Color3.fromHex("#20302A"),

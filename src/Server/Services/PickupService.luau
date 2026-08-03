@@ -8,7 +8,7 @@
 	которое клиент повторяет точно.
 
 	Публичный API:
-		PickupService.StartRun(slot, player)
+		PickupService.StartRun(slot, player, magnetRadius)
 		PickupService.StopRun(slot)
 		PickupService.Drop(slot, position, value)      -- вызывается на смерти врага
 		PickupService.Tick(slot, dt, playerLocal)
@@ -25,6 +25,10 @@ local Packet = require(Shared.Util.Packet)
 type Sim = {
 	slot: number,
 	player: Player,
+
+	-- Радиус магнита — характеристика игрока: базовое значение плюс бонус
+	-- питомца (раздел 6 ТЗ). Снимается на входе в бой и за забег не меняется.
+	magnetRadius: number,
 
 	positions: { Vector3 },
 	values: { number },
@@ -97,7 +101,7 @@ function PickupService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 		return
 	end
 
-	local magnetRadius = Balance.Pickup.magnetRadius
+	local magnetRadius = sim.magnetRadius
 	local magnetRadiusSquared = magnetRadius * magnetRadius
 	local collectRadius = Balance.Pickup.collectRadius
 	local collectRadiusSquared = collectRadius * collectRadius
@@ -163,10 +167,12 @@ function PickupService.GetAliveCount(slot: number): number
 	return if sim then sim.aliveCount else 0
 end
 
-function PickupService.StartRun(slot: number, player: Player): ()
+function PickupService.StartRun(slot: number, player: Player, magnetRadius: number): ()
 	local sim: Sim = {
 		slot = slot,
 		player = player,
+
+		magnetRadius = magnetRadius,
 
 		positions = table.create(CAPACITY, Vector3.zero),
 		values = table.create(CAPACITY, 0),

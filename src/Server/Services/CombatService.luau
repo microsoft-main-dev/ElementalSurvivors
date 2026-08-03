@@ -32,6 +32,7 @@ local Balance = require(Shared.Config.Balance)
 local DataService = require(script.Parent.DataService)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
+local PetService = require(script.Parent.PetService)
 local PickupService = require(script.Parent.PickupService)
 local ProgressionService = require(script.Parent.ProgressionService)
 local RewardService = require(script.Parent.RewardService)
@@ -290,9 +291,17 @@ function CombatService.BeginRun(player: Player): boolean
 		return false
 	end
 
-	humanoid.MaxHealth = Balance.Combat.playerMaxHealth
-	humanoid.Health = Balance.Combat.playerMaxHealth
-	humanoid.WalkSpeed = Balance.Combat.playerWalkSpeed
+	--[[
+		Характеристики забега = база плюс бонусы питомца (разделы 5 и 6 ТЗ).
+		Лоадаут снимается ровно здесь и на весь забег: сменить питомца в бою
+		нельзя, а пересчёт в цикле означал бы, что покупка в лобби чужого
+		сервера могла бы изменить идущий бой.
+	]]
+	local loadout = PetService.GetLoadout(player)
+
+	humanoid.MaxHealth = loadout.maxHealth
+	humanoid.Health = loadout.maxHealth
+	humanoid.WalkSpeed = loadout.walkSpeed
 
 	root.CFrame = ArenaService.GetSpawnCFrame(slot)
 
@@ -344,14 +353,16 @@ function CombatService.BeginRun(player: Player): boolean
 	end
 
 	EnemyService.StartRun(slot, player, ArenaService.GetOrigin(slot), ArenaService.GetSeed(slot))
-	PickupService.StartRun(slot, player)
+	PickupService.StartRun(slot, player, loadout.magnetRadius)
 	ProgressionService.StartRun(slot, player)
-	-- Стартовая способность пока одна для всех; в M4 её будет задавать питомец.
-	AbilityService.StartRun(slot, player, Balance.Progression.starterAbility)
+	AbilityService.StartRun(slot, player, loadout)
 
+	-- Радиус магнита уходит на клиент вместе со стартом: кристаллы он
+	-- притягивает сам тем же правилом, и без радиуса картинка разойдётся
+	-- с тем, что реально подобрано на сервере.
 	local remote = runStartedRemote
 	if remote then
-		remote:FireClient(player, slot, ArenaService.GetSeed(slot))
+		remote:FireClient(player, slot, ArenaService.GetSeed(slot), loadout.magnetRadius)
 	end
 	sendSnapshot(run)
 

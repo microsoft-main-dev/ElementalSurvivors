@@ -34,6 +34,8 @@ local player = Players.LocalPlayer
 local active = false
 local paused = false
 local origin = Vector3.zero
+-- Радиус магнита этого забега; приходит с сервера вместе со стартом.
+local magnetRadius = Balance.Pickup.magnetRadius
 
 local positions: { [number]: Vector3 } = {}
 local parts: { [number]: Part } = {}
@@ -147,7 +149,7 @@ local function onHeartbeat(deltaTime: number): ()
 		return
 	end
 
-	local magnetRadiusSquared = Balance.Pickup.magnetRadius ^ 2
+	local magnetRadiusSquared = magnetRadius ^ 2
 	local step = Balance.Pickup.magnetSpeed * deltaTime
 	local height = Balance.Pickup.height
 	local count = 0
@@ -192,9 +194,15 @@ function CrystalRenderController.GetActiveCount(): number
 end
 
 function CrystalRenderController.Start(): ()
-	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(function(slot: number)
+	--[[
+		Радиус магнита приходит с сервера: он зависит от питомца (раздел 6 ТЗ),
+		и брать его из Balance значило бы рисовать притяжение не там, где оно
+		на самом деле происходит.
+	]]
+	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(function(slot: number, _seed: number, radius: number?)
 		clearAll()
 		origin = Vector3.new(slot * Balance.Arena.spacing, 0, 0)
+		magnetRadius = radius or Balance.Pickup.magnetRadius
 
 		local folder = Instance.new("Folder")
 		folder.Name = "Crystals"

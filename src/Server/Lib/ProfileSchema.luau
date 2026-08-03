@@ -42,11 +42,16 @@ ProfileSchema.StoreName = "PlayerData"
 --[[
 	Дефолты нового игрока — полная форма из раздела 6 ТЗ.
 
-	Пустые ветки (pets, equipment, inventory, daily, offline, purchases) лежат
-	здесь заранее: это данные, а не системы следующих этапов, и так M4–M7 будут
-	заполнять готовые поля, а не мигрировать схему на живых игроках.
+	Пустые ветки (equipment, inventory, daily, purchases) лежат здесь заранее:
+	это данные, а не системы следующих этапов, и так M5–M7 будут заполнять
+	готовые поля, а не мигрировать схему на живых игроках.
 
-	M3 пишет отсюда только currency.essence, stats.* и progress.endlessBest.
+	M3 писал отсюда currency.essence, stats.* и progress.endlessBest.
+	M4 добавил pets, petUidCounter, equippedPet, flags и offline.
+
+	petUidCounter и flags появились в M4 у профилей, которые уже существуют.
+	Настоящей миграции им не нужно: Profile:Reconcile() дольёт оба поля
+	дефолтом при следующей загрузке, поэтому Version не поднят.
 ]]
 local template: ProfileData = {
 	version = ProfileSchema.Version,
@@ -59,9 +64,16 @@ local template: ProfileData = {
 	talentPoints = 0,
 	talents = {},
 
-	-- Питомцы и экипировка — M4.
+	-- Питомцы (M4). Коллекция уникальна по petId: дубликат уходит опытом
+	-- в уже имеющегося питомца, а не заводит вторую запись.
 	pets = {},
+	petUidCounter = 0,
 	equippedPet = "",
+
+	-- Одноразовые отметки: "стартовый питомец выдан" и далее по этапам.
+	flags = {},
+
+	-- Экипировка — M6, вместе с её выпадением.
 	equipment = {},
 	inventory = {
 		items = {},
@@ -79,9 +91,15 @@ local template: ProfileData = {
 		quests = {},
 	},
 
+	--[[
+		Экспедиции питомцев (раздел 6.1 ТЗ). lastSeen — отметка серверного
+		времени, от которой считается накопление; ноль означает «профиль ещё
+		ни разу не закрывался», и дохода за него не начисляется.
+	]]
 	offline = {
 		lastSeen = 0,
 		claimedAt = 0,
+		pending = 0,
 	},
 
 	purchases = {

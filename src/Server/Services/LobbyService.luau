@@ -3,9 +3,17 @@
 	LobbyService — лобби целиком строится кодом при старте сервера (раздел 4 ТЗ).
 	Ручного строительства в Studio нет: всё, что видно в игре, лежит в git.
 
-	В M0 здесь: атмосфера, пол с бортиками, невидимые стены, точка спавна в центре,
-	табличка студии и заглушка портала. Логика слотов арен, выбора режима
-	и телепорта появится в M1.
+	Здесь только геометрия и точки взаимодействия. Панели, которые эти точки
+	открывают, — целиком клиентские: сервер не должен участвовать в показе окна,
+	его дело — проверять то, что игрок в этом окне нажал (это LobbyNetService).
+
+	Поэтому у промптов проставлен атрибут Panel: клиент по нему понимает, какое
+	окно открыть, и ни одного лишнего Remote для этого не нужно.
+
+	Объекты раздела 4: портал, пять яиц, прилавок магазина и стенд питомца.
+	Колесо фортуны, стенд рекордсменов и ежедневные квесты решением владельца
+	отнесены к M6 — они опираются на сюжетные уровни и бесконечный режим,
+	которых до M6 нет.
 
 	Публичный API:
 		LobbyService.Init()          -- строит мир
@@ -21,6 +29,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Branding = require(Shared.Config.Branding)
 local CombatService = require(script.Parent.CombatService)
+local Eggs = require(Shared.Config.Eggs)
 local Palette = require(Shared.Config.Palette)
 
 local LOBBY_FOLDER_NAME = "Lobby"
@@ -272,6 +281,123 @@ local function buildPortal(parent: Instance): ProximityPrompt
 	return prompt
 end
 
+--[[
+	Точка взаимодействия. Атрибут Panel говорит клиенту, какое окно открыть:
+	сервер о самих окнах ничего не знает и знать не должен.
+
+	MaxActivationDistance небольшой намеренно — объекты стоят рядом, и широкая
+	зона означала бы, что игрок целится в яйцо, а открывается магазин.
+]]
+local function addPrompt(parent: BasePart, objectText: string, actionText: string, panel: string, key: string?): ()
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "OpenPrompt"
+	prompt.ObjectText = objectText
+	prompt.ActionText = actionText
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt:SetAttribute("Panel", panel)
+	if key then
+		prompt:SetAttribute("Target", key)
+	end
+	prompt.Parent = parent
+end
+
+--[[
+	Ряд яиц. Их пять, они стоят в линию и различаются цветом и подписью:
+	цена и шансы живут в Config/Eggs и показываются в панели, а не на модели —
+	иначе правка баланса требовала бы правки геометрии.
+]]
+local function buildEggs(parent: Instance): ()
+	local row = Instance.new("Folder")
+	row.Name = "Eggs"
+	row.Parent = parent
+
+	local spacing = Balance.Lobby.eggSpacing
+	local count = #Eggs.List
+	local startX = -(count - 1) * spacing / 2
+	local z = Balance.Lobby.eggRowOffset
+
+	for index, egg in Eggs.List do
+		local center = Vector3.new(startX + (index - 1) * spacing, 0, z)
+
+		local pedestal = makePart(
+			`Pedestal{egg.key}`,
+			Vector3.new(6, 3, 6),
+			center + Vector3.new(0, 1.5, 0),
+			Palette.Lobby.sign,
+			row
+		)
+		pedestal.CanCollide = true
+
+		local shell = Instance.new("Part")
+		shell.Name = `Egg{egg.key}`
+		shell.Shape = Enum.PartType.Ball
+		shell.Size = Vector3.new(4.4, 4.4, 4.4)
+		shell.Position = center + Vector3.new(0, 5.4, 0)
+		shell.Color = Color3.fromHex(egg.color)
+		shell.Material = Enum.Material.Neon
+		shell.Anchored = true
+		shell.CanCollide = false
+		shell.Parent = row
+
+		addPrompt(shell, egg.displayName, "Open", "Eggs", egg.key)
+	end
+end
+
+-- Прилавок магазина. Лоты — в Config/Shop, здесь только тумба и точка входа.
+local function buildShop(parent: Instance): ()
+	local center = Vector3.new(Balance.Lobby.shopOffset, 0, 0)
+
+	local counter =
+		makePart("ShopCounter", Vector3.new(8, 5, 14), center + Vector3.new(0, 2.5, 0), Palette.Lobby.sign, parent)
+	counter.CanCollide = true
+
+	local sign =
+		makePart("ShopSign", Vector3.new(1, 4, 12), center + Vector3.new(0, 7, 0), Palette.Lobby.portalGlow, parent)
+	sign.Material = Enum.Material.Neon
+	sign.CanCollide = false
+
+	addPrompt(counter, "Shop", "Browse", "Shop")
+end
+
+--[[
+	Стенд питомца. Сам питомец на нём — модель клиента: она у каждого игрока
+	своя, а серверная геометрия одна на всех.
+]]
+local function buildPetStand(parent: Instance): ()
+	local center = Vector3.new(-Balance.Lobby.petStandOffset, 0, 0)
+
+	local base = Instance.new("Part")
+	base.Name = "PetStand"
+	base.Shape = Enum.PartType.Cylinder
+	base.Size = Vector3.new(1.2, 14, 14)
+	base.CFrame = CFrame.new(center + Vector3.new(0, 0.6, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	base.Color = Palette.Lobby.border
+	base.Material = Enum.Material.SmoothPlastic
+	base.Anchored = true
+	base.CanCollide = true
+	base.Parent = parent
+
+	local glow = Instance.new("Part")
+	glow.Name = "PetStandGlow"
+	glow.Shape = Enum.PartType.Cylinder
+	glow.Size = Vector3.new(0.2, 10, 10)
+	glow.CFrame = CFrame.new(center + Vector3.new(0, 1.3, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	glow.Color = Palette.Lobby.portal
+	glow.Material = Enum.Material.Neon
+	glow.Anchored = true
+	glow.CanCollide = false
+	glow.Parent = parent
+
+	--[[
+		Позицию для модели питомца клиент считает сам из того же
+		Balance.Lobby.petStandOffset: одно число в конфиге, две стороны,
+		никакой репликации ради статичной точки.
+	]]
+	addPrompt(base, "Pets", "Manage", "Pets")
+end
+
 function LobbyService.Init(): ()
 	applyLighting()
 	clearDefaults()
@@ -287,6 +413,9 @@ function LobbyService.Init(): ()
 
 	buildFloor(folder)
 	spawnLocation = buildSpawn(folder)
+	buildEggs(folder)
+	buildShop(folder)
+	buildPetStand(folder)
 
 	local prompt = buildPortal(folder)
 

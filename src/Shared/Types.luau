@@ -142,13 +142,113 @@ export type RunSnapshot = {
 export type RunEndReason = "Death" | "Left"
 
 --[[
+	Питомцы (разделы 6 и 6.1 ТЗ). Питомец — это класс: он задаёт стартовую
+	способность боя, даёт пассивные бонусы и усиливает свою стихию.
+
+	Редкость влияет на три вещи сразу: шанс из яйца, силу бонусов и вклад
+	в оффлайн-доход. Все три коэффициента — в Balance.Pets, здесь только форма.
+]]
+export type PetRarity = "B" | "A" | "S" | "SS" | "SSS"
+
+-- Пассивные бонусы. Это добавки к базовым значениям, а не множители:
+-- складывать добавки безопаснее, чем перемножать проценты из разных систем.
+export type PetPassives = {
+	maxHealth: number,
+	walkSpeed: number,
+	magnetRadius: number,
+}
+
+export type PetModel = {
+	size: Vector3,
+	shape: "Block" | "Ball" | "Cylinder",
+	neon: boolean,
+}
+
+export type PetDef = {
+	key: string,
+	typeId: number, -- индекс в Pets.List; порядок менять нельзя
+	displayName: string,
+	description: string,
+	rarity: PetRarity,
+	element: Element,
+	starterAbility: string, -- ключ из Config/Abilities
+	passives: PetPassives, -- значения на 1-м уровне питомца
+	elementDamage: number, -- множитель урона своей стихии на 1-м уровне
+	model: PetModel,
+}
+
+-- Питомец в профиле. uid уникален внутри профиля и никогда не переиспользуется.
+export type PetInstance = {
+	uid: string,
+	petId: string,
+	level: number,
+	xp: number,
+}
+
+--[[
+	Всё, что питомец даёт забегу. Собирается один раз при входе в бой:
+	пересчитывать его в цикле боя незачем, поменяться он не может.
+]]
+export type PetLoadout = {
+	petId: string, -- пустая строка означает «питомца нет»
+	starterAbility: string,
+	maxHealth: number,
+	walkSpeed: number,
+	magnetRadius: number,
+	elementDamage: { [Element]: number }, -- множитель урона, 1 = без бонуса
+}
+
+-- Строка списка питомцев на клиенте. Все числа уже посчитаны сервером.
+export type PetView = {
+	uid: string,
+	petId: string,
+	level: number,
+	xp: number, -- опыт внутри текущего уровня
+	xpToNext: number, -- сколько нужно до следующего; 0 на максимуме
+	power: number,
+	upgradeCost: number, -- 0 означает «улучшать некуда»
+	equipped: boolean,
+}
+
+export type PetsView = {
+	pets: { PetView },
+	equipped: string, -- uid экипированного питомца
+	collectionPower: number,
+	offlineRatePerHour: number,
+	offlineCapHours: number,
+}
+
+-- Результат одного ролла яйца. Дубликат не создаёт вторую запись, а даёт опыт.
+export type EggRollResult = {
+	petId: string,
+	duplicate: boolean,
+	xpGained: number,
+	level: number, -- уровень питомца после ролла
+}
+
+-- Отчёт экспедиций при входе (раздел 6.1 ТЗ). Считает только сервер.
+export type OfflineReport = {
+	seconds: number, -- сколько времени накопилось (уже обрезано по потолку)
+	essence: number,
+	ratePerHour: number,
+	capHours: number,
+}
+
+--[[
+	Действия, которые игрок может запросить в лобби. Строка приходит с клиента,
+	поэтому список закрытый: всё, чего здесь нет, отбрасывается на входе.
+]]
+export type LobbyAction = "BuyEgg" | "EquipPet" | "UpgradePet" | "BuyLot" | "ClaimOffline" | "Refresh"
+
+--[[
 	Профиль игрока (раздел 6 ТЗ).
 
-	Форма записана целиком, хотя M3 пишет только currency.essence, stats и
-	progress.endlessBest: это данные, а не системы, и так следующие этапы будут
-	заполнять готовые поля, а не мигрировать схему. Пустые ветки (pets,
-	equipment, inventory, daily, offline, purchases) типизированы нарочно слабо —
-	их настоящая форма появится вместе с самими системами в M4–M7.
+	Форма записана целиком, хотя M3 писал только currency.essence, stats и
+	progress.endlessBest: это данные, а не системы, и так следующие этапы
+	заполняют готовые поля, а не мигрируют схему. M4 добавил к этому pets,
+	equippedPet и offline. Оставшиеся ветки (equipment, inventory, daily,
+	purchases) типизированы нарочно слабо — их настоящая форма появится
+	вместе с самими системами в M5–M7.
 
 	Ограничения ProfileStore: никаких Vector3/Color3/Instance/функций, никаких
 	смешанных таблиц и дыр в массивах. Всё, что попадает в профиль, — числа,
@@ -178,9 +278,19 @@ export type ProfileDaily = {
 	quests: { unknown },
 }
 
+--[[
+	Экспедиции питомцев (раздел 6.1 ТЗ).
+
+	pending — уже посчитанный, но ещё не забранный доход. Он лежит в профиле,
+	а не в памяти сервера, по двум причинам сразу: игрок, закрывший окно без
+	сбора, ничего не теряет, а промежуток времени между двумя заходами
+	засчитывается ровно один раз — он превращается в pending в тот же момент,
+	когда сдвигается lastSeen.
+]]
 export type ProfileOffline = {
 	lastSeen: number,
 	claimedAt: number,
+	pending: number,
 }
 
 export type ProfilePurchases = {
@@ -196,8 +306,19 @@ export type ProfileData = {
 	xp: number,
 	talentPoints: number,
 	talents: { [string]: number },
-	pets: { unknown },
+	pets: { PetInstance },
+	--[[
+		Счётчик uid питомцев. Живёт в профиле, а не в сервисе: uid обязан быть
+		уникальным на всём протяжении жизни аккаунта, а серверы приходят и уходят.
+	]]
+	petUidCounter: number,
 	equippedPet: string,
+	--[[
+		Одноразовые отметки («стартовый питомец выдан», позже — «туториал пройден»).
+		Отдельная ветка нужна, чтобы такие флаги не расползались по чужим по смыслу
+		полям: их будет много, а форма у всех одинаковая.
+	]]
+	flags: { [string]: boolean },
 	equipment: { [string]: string },
 	inventory: {
 		items: { unknown },

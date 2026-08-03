@@ -18,10 +18,18 @@
 	заработать что-либо без профиля физически невозможно.
 
 	Публичный API:
-		DataService.GetProfile(player)                        -> ProfileData?
-		DataService.WaitForProfile(player, timeout?)          -> ProfileData?
-		DataService.AddCurrency(player, kind, amount, reason) -> boolean
-		DataService.RecordRun(player, kills, duration)        -> (boolean, boolean)
+		DataService.GetProfile(player)                          -> ProfileData?
+		DataService.WaitForProfile(player, timeout?)            -> ProfileData?
+		DataService.AddCurrency(player, kind, amount, reason)   -> boolean
+		DataService.SpendCurrency(player, kind, amount, reason) -> boolean
+		DataService.RecordRun(player, kills, duration)          -> (boolean, boolean)
+		DataService.AddPet(player, petId)                       -> (string?, boolean, number)
+		DataService.AddPetXp(player, uid, amount)               -> boolean
+		DataService.SetEquippedPet(player, uid)                 -> boolean
+		DataService.SetFlag(player, name, value)                -> boolean
+		DataService.TouchLastSeen(player)
+		DataService.AccrueOffline(player, amount, cap)          -> boolean
+		DataService.ClaimOffline(player, reason)                -> number
 		DataService.SaveNow(player)
 		DataService.SetReleaseHook(fn)
 		DataService.PushView(player)
@@ -33,6 +41,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Net = require(Shared.Net)
+local Pets = require(Shared.Config.Pets)
 local ProfileSchema = require(script.Parent.Parent.Lib.ProfileSchema)
 local ProfileStore = require(script.Parent.Parent.Lib.ProfileStore)
 local Types = require(Shared.Types)
@@ -58,7 +67,8 @@ local viewRemote: RemoteEvent? = nil
 	аналитика появится не раньше M7.
 ]]
 local function logGrant(player: Player, kind: string, amount: number, reason: string, balance: number): ()
-	print(`[DataService] {player.Name} +{amount} {kind} ({reason}); баланс: {balance}`)
+	local sign = if amount >= 0 then "+" else ""
+	print(`[DataService] {player.Name} {sign}{amount} {kind} ({reason}); баланс: {balance}`)
 end
 
 local function isSaneAmount(value: number): boolean
@@ -151,6 +161,48 @@ function DataService.AddCurrency(player: Player, kind: Types.CurrencyKind, amoun
 end
 
 --[[
+	Списание валюты. Единственная операция, которая уменьшает баланс, и она же
+	единственное место, где проверяется, хватает ли денег: если проверку делать
+	в вызывающем коде, рано или поздно появится путь, где её забыли.
+
+	Проверка и списание идут подряд без yield — между ними физически не может
+	вклиниться вторая покупка того же игрока.
+]]
+function DataService.SpendCurrency(player: Player, kind: Types.CurrencyKind, amount: number, reason: string): boolean
+	if amount <= 0 or not isSaneAmount(amount) then
+		warn(`[DataService] Отклонено списание {amount} {kind} у {player.Name} ({reason})`)
+		return false
+	end
+
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local currency = data.currency
+	local balance: number
+
+	if kind == "essence" then
+		if currency.essence < amount then
+			return false
+		end
+		balance = currency.essence - amount
+		currency.essence = balance
+	else
+		if currency.prisms < amount then
+			return false
+		end
+		balance = currency.prisms - amount
+		currency.prisms = balance
+	end
+
+	logGrant(player, kind, -amount, reason, balance)
+
+	DataService.PushView(player)
+	return true
+end
+
+--[[
 	Итоги забега в статистику профиля.
 	Возвращает (записано ли, стало ли время рекордом).
 ]]
@@ -180,6 +232,186 @@ function DataService.RecordRun(player: Player, kills: number, duration: number):
 	end
 
 	return true, newBest
+end
+
+--[[
+	Питомцы (раздел 6 ТЗ).
+
+	Коллекция уникальна по petId: дубликат не создаёт вторую запись, а уходит
+	опытом в уже имеющегося. Так решено не только потому, что этого требует ТЗ,
+	но и ради экономики — раздел 6.1 прямо предупреждает, что коллекция из
+	сотни дубликатов не должна доить оффлайн-доход лучше топовой.
+
+	Возвращает (uid, дубликат ли, сколько опыта ушло дубликатом).
+	uid равен nil, только если писать было некуда.
+]]
+function DataService.AddPet(player: Player, petId: string): (string?, boolean, number)
+	local data = DataService.GetProfile(player)
+	if not data then
+		return nil, false, 0
+	end
+
+	local def = Pets.ByKey[petId]
+	if not def then
+		warn(
+			`[DataService] Попытка выдать несуществующего питомца "{petId}" игроку {player.Name}`
+		)
+		return nil, false, 0
+	end
+
+	for _, pet in data.pets do
+		if pet.petId == petId then
+			local xp = Pets.DuplicateXp(petId)
+			pet.xp += xp
+			pet.level = Pets.LevelForXp(pet.xp)
+			print(`[DataService] {player.Name} дубликат {petId}: +{xp} опыта питомцу`)
+			return pet.uid, true, xp
+		end
+	end
+
+	-- Счётчик живёт в профиле: uid обязан оставаться уникальным всю жизнь
+	-- аккаунта, а серверы приходят и уходят.
+	data.petUidCounter += 1
+	local uid = tostring(data.petUidCounter)
+
+	table.insert(data.pets, { uid = uid, petId = petId, level = 1, xp = 0 })
+	print(`[DataService] {player.Name} получил питомца {petId} (uid {uid})`)
+
+	-- Первый питомец экипируется сам: пустой слот при непустой коллекции —
+	-- это забытый игроком бонус, а не осмысленный выбор.
+	if data.equippedPet == "" then
+		data.equippedPet = uid
+	end
+
+	return uid, false, 0
+end
+
+local function findPet(data: ProfileData, uid: string): Types.PetInstance?
+	for _, pet in data.pets do
+		if pet.uid == uid then
+			return pet
+		end
+	end
+	return nil
+end
+
+--[[
+	Опыт питомцу. Уровень не хранится независимо от опыта, а пересчитывается
+	из него функцией Pets.LevelForXp: два независимых поля рано или поздно
+	разъедутся, и разъедутся они в пользу игрока.
+]]
+function DataService.AddPetXp(player: Player, uid: string, amount: number): boolean
+	if amount <= 0 or not isSaneAmount(amount) then
+		return false
+	end
+
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local pet = findPet(data, uid)
+	if not pet then
+		return false
+	end
+
+	pet.xp += amount
+	pet.level = Pets.LevelForXp(pet.xp)
+	return true
+end
+
+function DataService.SetEquippedPet(player: Player, uid: string): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	if not findPet(data, uid) then
+		return false
+	end
+
+	data.equippedPet = uid
+	return true
+end
+
+function DataService.SetFlag(player: Player, name: string, value: boolean): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+	data.flags[name] = value
+	return true
+end
+
+--[[
+	Отметка «игрок был здесь» для экспедиций (раздел 6.1 ТЗ).
+
+	Только os.time() сервера: ни часовой пояс, ни системное время устройства
+	в расчёт не входят и на сервер не приходят вовсе.
+]]
+function DataService.TouchLastSeen(player: Player): ()
+	local data = DataService.GetProfile(player)
+	if data then
+		data.offline.lastSeen = os.time()
+	end
+end
+
+--[[
+	Зачисление промежутка оффлайна в копилку.
+
+	Ключевая операция всей механики: доход за промежуток и сдвиг lastSeen
+	происходят вместе и без yield между ними. Именно это делает двойное
+	начисление невозможным — любой путь, где деньги посчитаны, а отметка
+	осталась старой, при следующем входе посчитает тот же промежуток снова.
+
+	cap — потолок копилки: она обрезается при каждом зачислении, поэтому
+	стопка незабранных заходов не превращается в обход потолка накопления.
+]]
+function DataService.AccrueOffline(player: Player, amount: number, cap: number): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	if amount <= 0 or not isSaneAmount(amount) then
+		return false
+	end
+
+	local offline = data.offline
+	offline.lastSeen = os.time()
+	offline.pending = math.floor(math.min(offline.pending + amount, math.max(cap, 0)))
+
+	return true
+end
+
+--[[
+	Забрать копилку. Возвращает выданное; ноль означает, что забирать было нечего.
+
+	Обнуление стоит до начисления намеренно: если AddCurrency почему-то не
+	пройдёт, игрок потеряет выплату — это неприятно, но безопасно. Обратный
+	порядок при той же ошибке оставил бы копилку полной после успешной
+	выдачи, а это уже дюп.
+]]
+function DataService.ClaimOffline(player: Player, reason: string): number
+	local data = DataService.GetProfile(player)
+	if not data then
+		return 0
+	end
+
+	local offline = data.offline
+	local amount = math.floor(offline.pending)
+	if amount <= 0 then
+		return 0
+	end
+
+	offline.pending = 0
+	offline.claimedAt = os.time()
+
+	if not DataService.AddCurrency(player, "essence", amount, reason) then
+		return 0
+	end
+
+	return amount
 end
 
 function DataService.SaveNow(player: Player): ()
@@ -222,6 +454,26 @@ local function runReleaseHook(player: Player): ()
 	end
 end
 
+--[[
+	Отметка «профиль закрывается вот сейчас» для экспедиций питомцев.
+
+	Живёт здесь, а не в OfflineService, по одной причине: оба пути закрытия
+	профиля проходят через этот файл, и подписываться на PlayerRemoving вторым
+	обработчиком было бы гонкой — releaseProfile успел бы убрать профиль
+	из таблицы раньше, чем чужой обработчик до него дотянулся.
+
+	Yield-иться нельзя: путь общий с выключением сервера.
+]]
+local function markSeen(player: Player): ()
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+
+	local data = profile.Data :: ProfileData
+	data.offline.lastSeen = os.time()
+end
+
 local function releaseProfile(player: Player): ()
 	local profile = profiles[player]
 	if not profile then
@@ -229,6 +481,7 @@ local function releaseProfile(player: Player): ()
 	end
 
 	runReleaseHook(player)
+	markSeen(player)
 
 	profiles[player] = nil
 	profile:EndSession()
@@ -319,6 +572,7 @@ function DataService.Init(): ()
 	game:BindToClose(function()
 		for player in profiles do
 			runReleaseHook(player)
+			markSeen(player)
 		end
 	end)
 end

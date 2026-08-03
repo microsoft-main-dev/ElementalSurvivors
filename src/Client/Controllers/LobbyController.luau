@@ -1,0 +1,361 @@
+--!strict
+--[[
+	LobbyController — интерфейс лобби (разделы 4 и 8 ТЗ).
+
+	Три обязанности и ни одной больше:
+		1. кнопки лобби и открытие панелей по ProximityPrompt объектов;
+		2. хранение последнего среза профиля и коллекции, пришедших с сервера;
+		3. отправка действий одним Remote с серверной валидацией.
+
+	Клиент не считает ничего, что влияет на прогресс: цены, шансы и остатки
+	приходят готовыми. Гашеная кнопка «не хватает Essence» — это подсказка,
+	а не проверка: настоящая проверка живёт в LobbyNetService, и она же
+	единственная, которой можно верить.
+
+	Панели живут в Client/UI: загрузчик сканирует только Controllers, поэтому
+	модуль без Init/Start там оказался бы контроллером-пустышкой.
+
+	На время боя весь интерфейс лобби прячется — в бою нет ни одного
+	интерактивного элемента, кроме карточек левел-апа (раздел 8 ТЗ).
+]]
+
+local Players = game:GetService("Players")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Balance = require(Shared.Config.Balance)
+local EggsPanel = require(script.Parent.Parent.UI.EggsPanel)
+local Net = require(Shared.Net)
+local OfflinePanel = require(script.Parent.Parent.UI.OfflinePanel)
+local Palette = require(Shared.Config.Palette)
+local Pets = require(Shared.Config.Pets)
+local PetsPanel = require(script.Parent.Parent.UI.PetsPanel)
+local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
+local Types = require(Shared.Types)
+local UiKit = require(script.Parent.Parent.UI.UiKit)
+
+local BUTTON_WIDTH = 116
+local BUTTON_GAP = 8
+local PET_SPIN_SPEED = 0.6 -- оборотов в секунду у модели на стенде
+
+local LobbyController = {}
+
+local player = Players.LocalPlayer
+
+local barGui: ScreenGui? = nil
+local petsPanel: PetsPanel.Panel? = nil
+local eggsPanel: EggsPanel.Panel? = nil
+local shopPanel: ShopPanel.Panel? = nil
+local offlinePanel: OfflinePanel.Panel? = nil
+
+local profileView: Types.ProfileView? = nil
+local petsView: Types.PetsView? = nil
+
+local petModel: BasePart? = nil
+local petSpin = 0
+local inRun = false
+
+local function send(action: string, target: string?, extra: unknown): ()
+	Net.GetEvent(Net.Id.LobbyRequest):FireServer(action, target, extra)
+end
+
+--[[
+	Имя экипированного питомца для подписи в магазине. Ищется по коллекции,
+	а не хранится отдельно: два места для одного факта разъезжаются.
+]]
+local function equippedInfo(): (string, string)
+	local view = petsView
+	if not view then
+		return "", ""
+	end
+
+	for _, pet in view.pets do
+		if pet.equipped then
+			local def = Pets.ByKey[pet.petId]
+			return pet.uid, if def then def.displayName else pet.petId
+		end
+	end
+
+	return "", ""
+end
+
+-- Раздаёт панелям то, что им нужно. Одно место, где сходятся оба среза.
+local function refreshPanels(): ()
+	local essence = if profileView then profileView.essence else 0
+	local prisms = if profileView then profileView.prisms else 0
+
+	local pets = petsPanel
+	if pets then
+		pets.Refresh(petsView, essence)
+	end
+
+	local eggs = eggsPanel
+	if eggs then
+		eggs.Refresh(essence, prisms)
+	end
+
+	local shop = shopPanel
+	if shop then
+		local uid, name = equippedInfo()
+		shop.Refresh(essence, prisms, uid, name)
+	end
+end
+
+local function closeAll(): ()
+	local pets = petsPanel
+	if pets then
+		pets.Close()
+	end
+	local eggs = eggsPanel
+	if eggs then
+		eggs.Close()
+	end
+	local shop = shopPanel
+	if shop then
+		shop.Close()
+	end
+	local offline = offlinePanel
+	if offline then
+		offline.Close()
+	end
+end
+
+--[[
+	Открытие панели по имени. Одна точка входа и для кнопок нижней панели,
+	и для промптов у объектов: иначе объект и кнопка однажды начнут открывать
+	разные окна.
+]]
+local function openPanel(name: string, target: string?): ()
+	closeAll()
+
+	if name == "Pets" then
+		local pets = petsPanel
+		if pets then
+			pets.Open()
+		end
+	elseif name == "Eggs" then
+		local eggs = eggsPanel
+		if eggs then
+			eggs.Open(target)
+		end
+	elseif name == "Shop" then
+		local shop = shopPanel
+		if shop then
+			shop.Open()
+		end
+	end
+end
+
+--[[
+	Модель экипированного питомца на стенде.
+
+	Строится локально: у каждого игрока питомец свой, а серверная геометрия
+	лобби одна на всех — репликация личной модели заставила бы всех смотреть
+	на чужих питомцев в одной точке.
+]]
+local function updatePetModel(): ()
+	local existing = petModel
+	if existing then
+		existing:Destroy()
+		petModel = nil
+	end
+
+	local uid = (equippedInfo())
+	if uid == "" then
+		return
+	end
+
+	local view = petsView
+	if not view then
+		return
+	end
+
+	local petId = ""
+	for _, pet in view.pets do
+		if pet.uid == uid then
+			petId = pet.petId
+			break
+		end
+	end
+
+	local def = Pets.ByKey[petId]
+	if not def then
+		return
+	end
+
+	local part = Instance.new("Part")
+	part.Name = "EquippedPet"
+	part.Size = def.model.size
+	part.Color = Palette.Element[def.element]
+	part.Material = if def.model.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Massless = true
+
+	if def.model.shape == "Ball" then
+		part.Shape = Enum.PartType.Ball
+	elseif def.model.shape == "Cylinder" then
+		part.Shape = Enum.PartType.Cylinder
+	end
+
+	part.Parent = Workspace
+	petModel = part
+end
+
+-- Точка стенда считается из того же числа, что и на сервере (см. LobbyService).
+local function petStandPosition(): Vector3
+	return Vector3.new(-Balance.Lobby.petStandOffset, 6, 0)
+end
+
+local function onHeartbeat(deltaTime: number): ()
+	local part = petModel
+	if not part then
+		return
+	end
+
+	petSpin = (petSpin + deltaTime * PET_SPIN_SPEED) % 1
+	local bob = math.sin(petSpin * math.pi * 2) * 0.4
+	part.CFrame = CFrame.new(petStandPosition() + Vector3.new(0, bob, 0)) * CFrame.Angles(0, petSpin * math.pi * 2, 0)
+end
+
+local function buildBar(): ()
+	local playerGui = player:WaitForChild("PlayerGui")
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "LobbyBar"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 150
+	gui.Parent = playerGui
+	barGui = gui
+
+	local holder = UiKit.Frame(gui, "Holder")
+	holder.AnchorPoint = Vector2.new(0.5, 1)
+	holder.Position = UDim2.new(0.5, 0, 1, -14)
+	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 3 + BUTTON_GAP * 2, UiKit.ButtonHeight)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, BUTTON_GAP)
+	layout.Parent = holder
+
+	--[[
+		Три кнопки — ровно те системы, которые в M4 существуют. Таланты (M5)
+		и квесты (M6) появятся здесь вместе с собой: кнопка, открывающая
+		пустое окно, хуже отсутствующей.
+	]]
+	local buttons: { { name: string, text: string } } = {
+		{ name = "Pets", text = "Pets" },
+		{ name = "Eggs", text = "Eggs" },
+		{ name = "Shop", text = "Shop" },
+	}
+
+	for order, entry in buttons do
+		local button = UiKit.Button(holder, entry.name, entry.text, Palette.UI.panel)
+		button.LayoutOrder = order
+		button.Size = UDim2.fromOffset(BUTTON_WIDTH, UiKit.ButtonHeight)
+		button.Activated:Connect(function()
+			openPanel(entry.name, nil)
+		end)
+	end
+end
+
+local function setVisible(visible: boolean): ()
+	local gui = barGui
+	if gui then
+		gui.Enabled = visible
+	end
+
+	if not visible then
+		closeAll()
+	end
+
+	local part = petModel
+	if part then
+		-- В бою стенд лобби всё равно за пять тысяч стадов отсюда, но
+		-- невидимая деталь не должна занимать место в рендере.
+		part.Transparency = if visible then 0 else 1
+	end
+end
+
+function LobbyController.Start(): ()
+	local playerGui = player:WaitForChild("PlayerGui")
+
+	buildBar()
+	petsPanel = PetsPanel.Build(playerGui, send)
+	eggsPanel = EggsPanel.Build(playerGui, send)
+	shopPanel = ShopPanel.Build(playerGui, send)
+	offlinePanel = OfflinePanel.Build(playerGui, send)
+
+	--[[
+		Промпты объектов лобби. Какое окно открыть, написано в атрибуте самого
+		промпта, который поставил сервер: клиент не сопоставляет объекты
+		с окнами по имени детали, иначе переименование парта тихо ломало бы
+		взаимодействие.
+	]]
+	ProximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, triggeringPlayer: Player)
+		if triggeringPlayer ~= player then
+			return
+		end
+
+		local panel = prompt:GetAttribute("Panel")
+		if typeof(panel) == "string" then
+			local target = prompt:GetAttribute("Target")
+			openPanel(panel :: string, if typeof(target) == "string" then target :: string else nil)
+		end
+	end)
+
+	Net.GetEvent(Net.Id.ProfileView).OnClientEvent:Connect(function(view: Types.ProfileView)
+		profileView = view
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.PetsView).OnClientEvent:Connect(function(view: Types.PetsView)
+		petsView = view
+		refreshPanels()
+		updatePetModel()
+	end)
+
+	Net.GetEvent(Net.Id.EggResult).OnClientEvent:Connect(function(results: { Types.EggRollResult })
+		local eggs = eggsPanel
+		if eggs then
+			eggs.ShowResults(results)
+		end
+	end)
+
+	--[[
+		Окно экспедиций не показывается поверх боя. В бою нет ни одного
+		интерактивного элемента, кроме карточек левел-апа (раздел 8 ТЗ),
+		и всплывшая панель означала бы, что игрок либо жмёт её вслепую,
+		либо теряет здоровье, пока читает. Копилка при этом никуда
+		не девается — она лежит в профиле и дождётся возвращения в лобби.
+	]]
+	Net.GetEvent(Net.Id.OfflineReport).OnClientEvent:Connect(function(report: Types.OfflineReport)
+		local offline = offlinePanel
+		if offline and not inRun then
+			offline.Show(report)
+		end
+	end)
+
+	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(function()
+		inRun = true
+		setVisible(false)
+	end)
+
+	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(function()
+		inRun = false
+		setVisible(true)
+		-- Забег меняет баланс, а срез профиля мог прийти до начисления.
+		send("Refresh", nil, nil)
+	end)
+
+	RunService.Heartbeat:Connect(onHeartbeat)
+end
+
+return LobbyController

@@ -17,8 +17,13 @@
 	Орбиты и ауры клиент рисует сам — их положение полностью определяется
 	уровнем способности и фазой, которые и так есть в снимке для HUD.
 
+	Бонус питомца к своей стихии (раздел 6 ТЗ) снимается один раз, при выдаче
+	способности, и лежит в её runtime множителем. Считать его в цикле боя было
+	бы и лишней работой, и лишним поводом однажды забыть про него в одной
+	из форм: множитель применяется там же, где берётся урон уровня.
+
 	Публичный API:
-		AbilityService.StartRun(slot, player, starterKey)
+		AbilityService.StartRun(slot, player, loadout)
 		AbilityService.StopRun(slot)
 		AbilityService.Grant(slot, key)        -> boolean
 		AbilityService.LevelUp(slot, key)      -> boolean
@@ -44,6 +49,8 @@ type Runtime = {
 	level: number,
 	timer: number,
 	phase: number,
+	-- Множитель урона от питомца: 1, если стихия способности ему чужая.
+	damageMult: number,
 	damage: number, -- накопленный урон за забег, для HUD и экрана результатов
 	-- Когда этот враг последний раз получал урон именно от этой способности.
 	-- Нужно формам с постоянным контактом (Orbit), см. tickOrbit.
@@ -55,6 +62,10 @@ type Sim = {
 	player: Player,
 	abilities: { Runtime },
 	byKey: { [string]: Runtime },
+
+	-- Бонусы питомца к стихиям, снятые на входе в бой. Поменяться за забег
+	-- они не могут: питомца в бою не сменить.
+	elementDamage: { [Types.Element]: number },
 
 	-- Снаряды: те же плоские массивы, что и у врагов, только меньше.
 	projPosition: { Vector3 },
@@ -135,6 +146,7 @@ local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Ve
 	local radius = data.radius :: number
 	local hitRadius = data.hitRadius :: number
 	local repeatDelay = data.cooldown
+	local damage = data.damage * runtime.damageMult
 	local hitTimes = runtime.hitTimes
 
 	runtime.phase = (runtime.phase + (data.angularSpeed :: number) * dt) % (math.pi * 2)
@@ -150,7 +162,7 @@ local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Ve
 			local last = hitTimes[enemyId]
 			if last == nil or now - last >= repeatDelay then
 				hitTimes[enemyId] = now
-				local _, dealt = EnemyService.Damage(sim.slot, enemyId, data.damage)
+				local _, dealt = EnemyService.Damage(sim.slot, enemyId, damage)
 				runtime.damage += dealt
 			end
 		end
@@ -160,9 +172,10 @@ end
 -- Aura — постоянный круг вокруг игрока, урон по всем внутри по кулдауну.
 local function tickAura(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 	local data = runtime.def.levels[runtime.level]
+	local damage = data.damage * runtime.damageMult
 	local hits = EnemyService.CollectHits(sim.slot, playerLocal, data.radius :: number, sim.hits)
 	for index = 1, hits do
-		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], data.damage)
+		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], damage)
 		runtime.damage += dealt
 	end
 end
@@ -170,9 +183,10 @@ end
 -- Nova — то же по геометрии, но разовая вспышка, и клиент рисует волну.
 local function tickNova(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 	local data = runtime.def.levels[runtime.level]
+	local damage = data.damage * runtime.damageMult
 	local hits = EnemyService.CollectHits(sim.slot, playerLocal, data.radius :: number, sim.hits)
 	for index = 1, hits do
-		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], data.damage)
+		local _, dealt = EnemyService.Damage(sim.slot, sim.hits[index], damage)
 		runtime.damage += dealt
 	end
 
@@ -226,7 +240,7 @@ local function fireProjectiles(sim: Sim, runtime: Runtime, playerLocal: Vector3)
 		sim.projPosition[id] = playerLocal
 		sim.projDirection[id] = direction
 		sim.projSpeed[id] = data.speed :: number
-		sim.projDamage[id] = data.damage
+		sim.projDamage[id] = data.damage * runtime.damageMult
 		sim.projPierce[id] = data.pierce :: number
 		sim.projLife[id] = data.lifetime :: number
 		sim.projHitRadius[id] = data.hitRadius :: number
@@ -337,6 +351,9 @@ function AbilityService.Grant(slot: number, key: string): boolean
 		level = 1,
 		timer = def.levels[1].cooldown,
 		phase = 0,
+		-- Множитель снимается здесь, а не при каждом ударе: питомца за забег
+		-- не сменить, а забыть про бонус в одной из форм — легко.
+		damageMult = sim.elementDamage[def.element] or 1,
 		damage = 0,
 		hitTimes = {},
 	}
@@ -400,12 +417,19 @@ function AbilityService.GetLevel(slot: number, key: string): number
 	return if runtime then runtime.level else 0
 end
 
-function AbilityService.StartRun(slot: number, player: Player, starterKey: string): ()
+--[[
+	Начало забега. Стартовую способность задаёт питомец (раздел 6 ТЗ), поэтому
+	сюда приходит весь его лоадаут целиком, а не один ключ: бонус к стихии
+	нужен ровно тогда же, когда и способность.
+]]
+function AbilityService.StartRun(slot: number, player: Player, loadout: Types.PetLoadout): ()
 	local sim: Sim = {
 		slot = slot,
 		player = player,
 		abilities = {},
 		byKey = {},
+
+		elementDamage = loadout.elementDamage,
 
 		projPosition = table.create(CAPACITY, Vector3.zero),
 		projDirection = table.create(CAPACITY, Vector3.zero),
@@ -431,7 +455,7 @@ function AbilityService.StartRun(slot: number, player: Player, starterKey: strin
 	end
 
 	sims[slot] = sim
-	AbilityService.Grant(slot, starterKey)
+	AbilityService.Grant(slot, loadout.starterAbility)
 end
 
 function AbilityService.StopRun(slot: number): ()
