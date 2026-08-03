@@ -8,8 +8,12 @@
 	ProgressionService со всеми проверками.
 
 	Боевого кода здесь нет: способности живут в AbilityService, кристаллы
-	в PickupService, уровни в ProgressionService. Этот сервис только связывает
-	их жизненный цикл с жизненным циклом забега и шлёт снимок для HUD.
+	в PickupService, уровни в ProgressionService, награда в RewardService.
+	Этот сервис только связывает их жизненный цикл с жизненным циклом забега
+	и шлёт снимок для HUD.
+
+	Он же отвечает за то, чтобы забег был оплачен ровно один раз и при любом
+	исходе: смерть, выход через портал, дисконнект, выключение сервера.
 
 	Публичный API:
 		CombatService.BeginRun(player)              -> boolean
@@ -25,10 +29,12 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AbilityService = require(script.Parent.AbilityService)
 local ArenaService = require(script.Parent.ArenaService)
 local Balance = require(Shared.Config.Balance)
+local DataService = require(script.Parent.DataService)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
 local PickupService = require(script.Parent.PickupService)
 local ProgressionService = require(script.Parent.ProgressionService)
+local RewardService = require(script.Parent.RewardService)
 local Types = require(Shared.Types)
 
 export type RunStats = {
@@ -45,6 +51,7 @@ type RunState = {
 	stats: RunStats,
 	connections: { RBXScriptConnection },
 	ending: boolean,
+	awarded: boolean, -- награда за забег уже начислена, второй раз нельзя
 }
 
 local ENTER_COOLDOWN = 1.5
@@ -58,6 +65,7 @@ local lastEnterAttempt: { [Player]: number } = {}
 local notifyRemote: RemoteEvent? = nil
 local runStartedRemote: RemoteEvent? = nil
 local runEndedRemote: RemoteEvent? = nil
+local runResultRemote: RemoteEvent? = nil
 local snapshotRemote: UnreliableRemoteEvent? = nil
 
 local function notify(player: Player, message: string): ()
@@ -176,12 +184,46 @@ local function onContact(player: Player, damage: number): ()
 	end
 end
 
+--[[
+	Итоги забега, собранные из серверного состояния. Снимать их нужно ДО
+	остановки сервисов: после StopRun ни времени, ни урона по способностям
+	уже не существует.
+]]
+local function buildSummary(run: RunState, reason: Types.RunEndReason): Types.RunSummary
+	return {
+		reason = reason,
+		time = EnemyService.GetRunTime(run.slot),
+		kills = run.stats.kills,
+		level = ProgressionService.GetState(run.slot).level,
+		abilities = AbilityService.GetViews(run.slot),
+	}
+end
+
+--[[
+	Начисление награды. Вызывается из трёх мест — обычный конец забега, выход
+	игрока, выключение сервера, — поэтому защищено флагом: два начисления
+	за один забег означали бы дюп валюты.
+
+	Yield-иться здесь нельзя: на выключении сервера времени на это нет.
+]]
+local function awardRun(run: RunState, reason: Types.RunEndReason): Types.RunResult?
+	if run.awarded then
+		return nil
+	end
+	run.awarded = true
+
+	return RewardService.Award(run.player, buildSummary(run, reason))
+end
+
 function CombatService.EndRun(player: Player, reason: Types.RunEndReason): ()
 	local run = runs[player]
 	if not run or run.ending then
 		return
 	end
 	run.ending = true
+
+	-- Награда считается и начисляется до телепорта в лобби (раздел 5 ТЗ).
+	local result = awardRun(run, reason)
 
 	for _, connection in run.connections do
 		connection:Disconnect()
@@ -199,6 +241,14 @@ function CombatService.EndRun(player: Player, reason: Types.RunEndReason): ()
 	local remote = runEndedRemote
 	if remote then
 		remote:FireClient(player, reason)
+	end
+
+	-- Экран результатов отдельным пакетом: RunEnded переключает состояние
+	-- клиента, а этот показывает итоги. Если начислять было некуда
+	-- (профиль уже закрыт), экрана просто не будет.
+	local resultRemote = runResultRemote
+	if result and resultRemote then
+		resultRemote:FireClient(player, result)
 	end
 
 	-- Респавн в лобби: SpawnLocation стоит только там, поэтому LoadCharacter
@@ -226,6 +276,14 @@ function CombatService.BeginRun(player: Player): boolean
 		return false
 	end
 
+	-- Забег без профиля некуда засчитать. Попасть сюда без профиля нельзя
+	-- (персонаж не спавнится раньше загрузки), но проверка стоит копейку,
+	-- а цена ошибки — забег, за который игрок ничего не получит.
+	if not DataService.GetProfile(player) then
+		notify(player, "Your save data is still loading. Try again in a moment.")
+		return false
+	end
+
 	local slot = ArenaService.Acquire(player)
 	if not slot then
 		notify(player, "All arenas are busy. Try again in a moment.")
@@ -247,6 +305,7 @@ function CombatService.BeginRun(player: Player): boolean
 		stats = { kills = 0, startedAt = os.clock() },
 		connections = {},
 		ending = false,
+		awarded = false,
 	}
 	runs[player] = run
 	runBySlot[slot] = run
@@ -308,8 +367,9 @@ end
 	Респавном управляем сами, автоматический выключен.
 
 	Иначе движок возродит игрока по своему таймеру прямо посреди арены,
-	и это столкнётся с нашим возвратом в лобби. Заодно это то, что понадобится
-	в M3: персонаж должен появляться только после того, как загружен профиль.
+	и это столкнулось бы с нашим возвратом в лобби. Второе назначение —
+	порядок входа: персонаж появляется только после загрузки профиля,
+	поэтому заработать что-либо «до профиля» невозможно.
 ]]
 local function onCharacterAdded(player: Player, character: Model): ()
 	local humanoid = character:WaitForChild("Humanoid", 10) :: Humanoid?
@@ -336,7 +396,19 @@ local function onPlayerAdded(player: Player): ()
 
 	if player.Character then
 		onCharacterAdded(player, player.Character)
-	else
+		return
+	end
+
+	-- Ждём профиль и только потом впускаем в мир. Не дождались — игрока уже
+	-- кикает DataService, спавнить его в лобби бессмысленно и вредно.
+	if not DataService.WaitForProfile(player) then
+		warn(
+			`[CombatService] Персонаж {player.Name} не создан: профиль не загрузился`
+		)
+		return
+	end
+
+	if player.Parent then
 		player:LoadCharacter()
 	end
 end
@@ -345,6 +417,7 @@ function CombatService.Init(): ()
 	notifyRemote = Net.GetEvent(Net.Id.Notify)
 	runStartedRemote = Net.GetEvent(Net.Id.RunStarted)
 	runEndedRemote = Net.GetEvent(Net.Id.RunEnded)
+	runResultRemote = Net.GetEvent(Net.Id.RunResult)
 	snapshotRemote = Net.GetUnreliable(Net.Id.RunSnapshot)
 
 	Players.CharacterAutoLoads = false
@@ -356,6 +429,22 @@ function CombatService.Start(): ()
 	PickupService.SetCollectHandler(onCrystalCollected)
 	RunService.Heartbeat:Connect(onHeartbeat)
 
+	--[[
+		Забег, прерванный выходом игрока или выключением сервера, всё равно
+		должен быть оплачен: терять четырнадцать минут из-за дисконнекта нельзя.
+
+		Хук вызывается до закрытия сессии профиля, то есть пока в профиль ещё
+		можно писать. Дублирования с обработчиком PlayerRemoving ниже не будет:
+		порядок этих двух обработчиков не важен, потому что awardRun защищён
+		флагом и второй вызов ничего не делает.
+	]]
+	DataService.SetReleaseHook(function(player: Player)
+		local run = runs[player]
+		if run then
+			awardRun(run, "Left")
+		end
+	end)
+
 	for _, player in Players:GetPlayers() do
 		task.spawn(onPlayerAdded, player)
 	end
@@ -364,6 +453,7 @@ function CombatService.Start(): ()
 	Players.PlayerRemoving:Connect(function(player: Player)
 		local run = runs[player]
 		if run then
+			awardRun(run, "Left")
 			run.ending = true
 			for _, connection in run.connections do
 				connection:Disconnect()

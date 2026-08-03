@@ -1,5 +1,8 @@
 std = "roblox"
 
+# Вендорный ProfileStore не наш код и правится только повторным скачиванием.
+exclude = ["src/Server/Lib/ProfileStore.luau"]
+
 [lints]
 # Смешанные таблицы (массив + словарь) — обычный приём в конфигах, это не ошибка.
 mixed_table = "allow"

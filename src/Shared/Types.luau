@@ -141,6 +141,107 @@ export type RunSnapshot = {
 -- Причина завершения забега.
 export type RunEndReason = "Death" | "Left"
 
+--[[
+	Профиль игрока (раздел 6 ТЗ).
+
+	Форма записана целиком, хотя M3 пишет только currency.essence, stats и
+	progress.endlessBest: это данные, а не системы, и так следующие этапы будут
+	заполнять готовые поля, а не мигрировать схему. Пустые ветки (pets,
+	equipment, inventory, daily, offline, purchases) типизированы нарочно слабо —
+	их настоящая форма появится вместе с самими системами в M4–M7.
+
+	Ограничения ProfileStore: никаких Vector3/Color3/Instance/функций, никаких
+	смешанных таблиц и дыр в массивах. Всё, что попадает в профиль, — числа,
+	строки, булевы и таблицы из них.
+]]
+export type CurrencyKind = "essence" | "prisms"
+
+export type Currency = {
+	essence: number, -- обычная, добывается гриндом
+	prisms: number, -- донатная, появится в M7
+}
+
+export type ProfileProgress = {
+	storyStage: number, -- номер открытого сюжетного уровня (M6)
+	endlessBest: number, -- лучшее время забега, секунд
+}
+
+export type ProfileStats = {
+	totalRuns: number,
+	totalKills: number,
+	playtime: number, -- суммарное время в боях, секунд
+}
+
+export type ProfileDaily = {
+	lastWheelSpin: number,
+	streak: number,
+	quests: { unknown },
+}
+
+export type ProfileOffline = {
+	lastSeen: number,
+	claimedAt: number,
+}
+
+export type ProfilePurchases = {
+	gamepasses: { [string]: boolean },
+	battlePass: { unknown },
+	vipUntil: number,
+}
+
+export type ProfileData = {
+	version: number,
+	currency: Currency,
+	level: number,
+	xp: number,
+	talentPoints: number,
+	talents: { [string]: number },
+	pets: { unknown },
+	equippedPet: string,
+	equipment: { [string]: string },
+	inventory: {
+		items: { unknown },
+		consumables: { [string]: number },
+	},
+	progress: ProfileProgress,
+	daily: ProfileDaily,
+	offline: ProfileOffline,
+	purchases: ProfilePurchases,
+	stats: ProfileStats,
+}
+
+--[[
+	Срез профиля для клиента. Профиль целиком на клиент не уходит никогда:
+	показывать нужно немногое, а лишние поля — это лишний повод им поверить.
+]]
+export type ProfileView = {
+	essence: number,
+	prisms: number,
+	endlessBest: number,
+	totalRuns: number,
+}
+
+-- Итоги забега, собранные сервером из серверного же состояния.
+export type RunSummary = {
+	reason: RunEndReason,
+	time: number,
+	kills: number,
+	level: number,
+	abilities: { AbilityView },
+}
+
+-- То же плюс начисленное; уходит на экран результатов (раздел 8 ТЗ).
+export type RunResult = {
+	reason: RunEndReason,
+	time: number,
+	kills: number,
+	level: number,
+	abilities: { AbilityView },
+	essence: number, -- начислено за этот забег
+	newBest: boolean, -- время забега стало рекордом
+	currency: Currency, -- баланс уже после начисления
+}
+
 -- Причина исчезновения врага; уходит на клиент одним байтом.
 export type DespawnReason = "Killed" | "Culled"
 
