@@ -78,9 +78,18 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		это «топ по времени в бесконечном» (раздел 4 ТЗ), и сюжетный забег
 		фиксированной длины там не значит ничего.
 	]]
-	local _, newBest = DataService.RecordRun(player, summary.kills, summary.time, summary.mode == "Endless")
-	if newBest then
-		LeaderboardService.Submit(player, math.floor(summary.time))
+	local isEndless = summary.mode == "Endless"
+	local _, newBest = DataService.RecordRun(player, summary.kills, summary.time, isEndless)
+
+	--[[
+		На стенд уходит рекорд ИЗ ПРОФИЛЯ и после каждого бесконечного забега,
+		а не только когда рекорд обновился. Иначе рекорд, поставленный до
+		появления стенда, не попал бы на него никогда: игроку пришлось бы
+		сначала побить самого себя. Запись в хранилище растёт только вверх,
+		поэтому лишние отправки безвредны.
+	]]
+	if isEndless then
+		LeaderboardService.Submit(player, data.progress.endlessBest)
 	end
 
 	--[[

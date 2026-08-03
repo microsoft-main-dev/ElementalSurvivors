@@ -73,7 +73,18 @@ local function resolveName(userId: number): string
 end
 
 --[[
-	Отправить рекорд. Вызывается только на действительно новом личном рекорде.
+	Отправить личный рекорд на стенд.
+
+	Зовётся после КАЖДОГО забега в бесконечном режиме и получает рекорд
+	из профиля, а не время последнего забега. Так было не всегда, и это была
+	ошибка: отправка только на новом личном рекорде означала, что рекорд,
+	поставленный до появления стенда, на стенд не попадал никогда — игроку
+	пришлось бы сначала побить самого себя. Теперь стенд догоняет профиль
+	за один любой забег.
+
+	Запись через UpdateAsync, а не SetAsync: значение может только расти.
+	SetAsync затёр бы рекорд меньшим числом, если два сервера одного игрока
+	отправят записи вразнобой или если профиль когда-нибудь откатится.
 
 	Ошибки проглатываются намеренно: недоступный DataStore не должен ломать
 	конец забега, за который игроку уже начислена награда.
@@ -84,11 +95,18 @@ function LeaderboardService.Submit(player: Player, seconds: number): ()
 		return
 	end
 
+	local best = math.floor(seconds)
+
 	task.spawn(function()
 		local ok, err = pcall(function()
-			activeStore:SetAsync(tostring(player.UserId), math.floor(seconds))
+			activeStore:UpdateAsync(tostring(player.UserId), function(previous: number?): number
+				return math.max(previous or 0, best)
+			end)
 		end)
-		if not ok then
+
+		if ok then
+			print(`[LeaderboardService] {player.Name}: рекорд {best} с отправлен на стенд`)
+		else
 			warn(`[LeaderboardService] Не удалось записать рекорд {player.Name}: {err}`)
 		end
 	end)
