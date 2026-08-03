@@ -93,7 +93,7 @@ local products: { ProductDef } = {
 	{
 		key = "PrismsSmall",
 		kind = "prisms",
-		productId = 0,
+		productId = 3613036391,
 		displayName = "Handful of Prisms",
 		description = "80 Prisms. Exactly one Prism Egg.",
 		grant = { prisms = 80, boost = "", seconds = 0, charge = "", count = 0 },
@@ -101,7 +101,7 @@ local products: { ProductDef } = {
 	{
 		key = "PrismsMedium",
 		kind = "prisms",
-		productId = 0,
+		productId = 3613036418,
 		displayName = "Pouch of Prisms",
 		description = "200 Prisms. One Radiant Egg, or two Prism Eggs and change.",
 		grant = { prisms = 200, boost = "", seconds = 0, charge = "", count = 0 },
@@ -109,7 +109,7 @@ local products: { ProductDef } = {
 	{
 		key = "PrismsLarge",
 		kind = "prisms",
-		productId = 0,
+		productId = 3613036439,
 		displayName = "Chest of Prisms",
 		description = "450 Prisms.",
 		grant = { prisms = 450, boost = "", seconds = 0, charge = "", count = 0 },
@@ -117,7 +117,7 @@ local products: { ProductDef } = {
 	{
 		key = "PrismsHuge",
 		kind = "prisms",
-		productId = 0,
+		productId = 3613036454,
 		displayName = "Vault of Prisms",
 		description = "1200 Prisms.",
 		grant = { prisms = 1200, boost = "", seconds = 0, charge = "", count = 0 },
@@ -126,7 +126,7 @@ local products: { ProductDef } = {
 	{
 		key = "BoostHour",
 		kind = "boost",
-		productId = 0,
+		productId = 3613036477,
 		displayName = "Double Essence — 1 hour",
 		description = "Every run pays twice as much Essence for one hour.",
 		grant = { prisms = 0, boost = "EssenceX2", seconds = HOUR, charge = "", count = 0 },
@@ -134,7 +134,7 @@ local products: { ProductDef } = {
 	{
 		key = "BoostDay",
 		kind = "boost",
-		productId = 0,
+		productId = 3613036506,
 		displayName = "Double Essence — 1 day",
 		description = "Every run pays twice as much Essence for a full day.",
 		grant = { prisms = 0, boost = "EssenceX2", seconds = DAY, charge = "", count = 0 },
@@ -142,7 +142,7 @@ local products: { ProductDef } = {
 	{
 		key = "BoostWeek",
 		kind = "boost",
-		productId = 0,
+		productId = 3613036540,
 		displayName = "Double Essence — 7 days",
 		description = "Every run pays twice as much Essence for a week.",
 		grant = { prisms = 0, boost = "EssenceX2", seconds = 7 * DAY, charge = "", count = 0 },
@@ -151,7 +151,7 @@ local products: { ProductDef } = {
 	{
 		key = "LuckyRun",
 		kind = "charge",
-		productId = 0,
+		productId = 3613036579,
 		displayName = "Lucky Run",
 		description = "Ten times the Essence from your next finished run. Win or lose, it is spent.",
 		grant = { prisms = 0, boost = "", seconds = 0, charge = "LuckyRun", count = 1 },
@@ -160,7 +160,7 @@ local products: { ProductDef } = {
 	{
 		key = "Vip30",
 		kind = "vip",
-		productId = 0,
+		productId = 3613036609,
 		displayName = "VIP — 30 days",
 		description = "Double Essence, double expedition storage and a faster wheel for 30 days.",
 		grant = { prisms = 0, boost = "Vip", seconds = 30 * DAY, charge = "", count = 0 },
