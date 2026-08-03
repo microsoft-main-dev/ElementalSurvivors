@@ -37,6 +37,7 @@ local Pets = require(Shared.Config.Pets)
 local PetsPanel = require(script.Parent.Parent.UI.PetsPanel)
 local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
 local StagePanel = require(script.Parent.Parent.UI.StagePanel)
+local StorePanel = require(script.Parent.Parent.UI.StorePanel)
 local TalentsPanel = require(script.Parent.Parent.UI.TalentsPanel)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.Parent.UI.UiKit)
@@ -58,12 +59,14 @@ local offlinePanel: OfflinePanel.Panel? = nil
 local stagePanel: StagePanel.Panel? = nil
 local itemsPanel: ItemsPanel.Panel? = nil
 local dailyPanel: DailyPanel.Panel? = nil
+local storePanel: StorePanel.Panel? = nil
 
 local profileView: Types.ProfileView? = nil
 local petsView: Types.PetsView? = nil
 local talentsView: Types.TalentsView? = nil
 local itemsView: Types.ItemsView? = nil
 local questsView: Types.QuestsView? = nil
+local storeView: Types.StoreView? = nil
 local leaderboard: { Types.LeaderboardEntry } = {}
 
 local petModel: BasePart? = nil
@@ -134,6 +137,11 @@ local function refreshPanels(): ()
 	if daily then
 		daily.Refresh(questsView, leaderboard)
 	end
+
+	local store = storePanel
+	if store then
+		store.Refresh(storeView)
+	end
 end
 
 local function closeAll(): ()
@@ -168,6 +176,10 @@ local function closeAll(): ()
 	local daily = dailyPanel
 	if daily then
 		daily.Close()
+	end
+	local store = storePanel
+	if store then
+		store.Close()
 	end
 end
 
@@ -208,6 +220,11 @@ local function openPanel(name: string, target: string?): ()
 		local items = itemsPanel
 		if items then
 			items.Open()
+		end
+	elseif name == "Store" then
+		local store = storePanel
+		if store then
+			store.Open()
 		end
 	elseif name == "Quests" or name == "Wheel" or name == "Leaderboard" then
 		-- Три объекта лобби делят одну панель: у них одинаковая форма,
@@ -331,6 +348,7 @@ local function buildBar(): ()
 		{ name = "Shop", text = "Shop" },
 		{ name = "Talents", text = "Talents" },
 		{ name = "Quests", text = "Daily" },
+		{ name = "Store", text = "Store" },
 	}
 
 	for order, entry in buttons do
@@ -373,6 +391,8 @@ function LobbyController.Start(): ()
 	stagePanel = StagePanel.Build(playerGui, send)
 	itemsPanel = ItemsPanel.Build(playerGui, send)
 	dailyPanel = DailyPanel.Build(playerGui, send)
+	-- Витрине send не нужен: покупка идёт мимо сервера, прямо в Roblox.
+	storePanel = StorePanel.Build(playerGui)
 
 	--[[
 		Промпты объектов лобби. Какое окно открыть, написано в атрибуте самого
@@ -415,6 +435,11 @@ function LobbyController.Start(): ()
 
 	Net.GetEvent(Net.Id.QuestsView).OnClientEvent:Connect(function(view: Types.QuestsView)
 		questsView = view
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.StoreView).OnClientEvent:Connect(function(view: Types.StoreView)
+		storeView = view
 		refreshPanels()
 	end)
 

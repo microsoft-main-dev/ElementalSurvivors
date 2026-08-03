@@ -30,6 +30,11 @@
 		DataService.AddMetaXp(player, amount)                   -> number
 		DataService.SpendTalentPoint(player, nodeId, maxPoints) -> boolean
 		DataService.ResetTalents(player)                        -> number
+		DataService.ExtendBoost(player, key, seconds)           -> boolean
+		DataService.AddCharge(player, key, count)               -> boolean
+		DataService.ConsumeCharge(player, key)                  -> boolean
+		DataService.PruneBoosters(player)
+		DataService.ApplyReceipt(player, purchaseId, grant)     -> boolean
 		DataService.TouchLastSeen(player)
 		DataService.AccrueOffline(player, amount, cap)          -> boolean
 		DataService.ClaimOffline(player, reason)                -> number
@@ -44,6 +49,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Items = require(Shared.Config.Items)
+local Monetization = require(Shared.Config.Monetization)
 local Net = require(Shared.Net)
 local Pets = require(Shared.Config.Pets)
 local ProfileSchema = require(script.Parent.Parent.Lib.ProfileSchema)
@@ -57,6 +63,17 @@ local KICK_LOAD_FAILED = "Could not load your save data. Please rejoin in a mome
 local KICK_SESSION_TAKEN = "Your save data was opened on another server."
 
 local POLL_INTERVAL = 0.1
+
+--[[
+	Сколько ждать, пока чек покупки окажется в хранилище, и как часто проверять.
+
+	Тридцати секунд хватает на несколько попыток сейва подряд: ProfileStore
+	повторяет неудачные сохранения сам. Если не уложились — покупка остаётся
+	неподтверждённой, и Roblox пришлёт её снова, вплоть до следующего захода
+	игрока. Это медленно, но не теряет денег, а поспешное подтверждение теряет.
+]]
+local RECEIPT_SAVE_TIMEOUT = 30
+local RECEIPT_POLL = 0.2
 
 local DataService = {}
 
@@ -656,6 +673,219 @@ function DataService.AdvanceStoryStage(player: Player, clearedIndex: number): bo
 		`[DataService] {player.Name} прошёл уровень {clearedIndex}, открыт {data.progress.storyStage}`
 	)
 	return true
+end
+
+--[[
+	=== Покупки за Robux (M7) ===
+
+	Вечных геймпассов в игре нет решением владельца, поэтому второго пути выдачи
+	не существует: всё, что куплено за Robux, приходит сюда через ApplyReceipt.
+	Профиль хранит только то, чего не хранит сам Roblox, — сроки бустеров,
+	заряды и список обработанных чеков.
+]]
+
+-- Текущий срок бустера. VIP лежит отдельно: поле purchases.vipUntil есть
+-- в схеме с M3 (раздел 6 ТЗ), и второе место для того же факта не нужно.
+local function boostExpiry(data: ProfileData, key: string): number
+	if key == Monetization.VipBoostKey then
+		return data.purchases.vipUntil
+	end
+	return data.purchases.boosters[key] or 0
+end
+
+--[[
+	Продлить бустер.
+
+	Одинаковые бустеры складываются по времени, а не заменяют друг друга: купить
+	сутки поверх недоигранного часа и потерять этот час — прямой повод к возврату
+	средств. Отсчёт идёт от конца текущего срока, если он ещё не вышел, и от
+	«сейчас», если вышел.
+
+	Накопленный срок обрезается по потолку: бесконечное складывание превращает
+	бустер во вторую экономику.
+]]
+function DataService.ExtendBoost(player: Player, key: string, seconds: number): boolean
+	if seconds <= 0 or not isSaneAmount(seconds) then
+		warn(
+			`[DataService] Отклонено продление бустера "{key}" на {seconds} с: {player.Name}`
+		)
+		return false
+	end
+
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local now = os.time()
+	local from = math.max(boostExpiry(data, key), now)
+	local expiry = math.min(from + seconds, now + Balance.Monetization.boostCapSeconds)
+
+	if key == Monetization.VipBoostKey then
+		data.purchases.vipUntil = expiry
+	else
+		data.purchases.boosters[key] = expiry
+	end
+
+	print(`[DataService] {player.Name} бустер {key} действует ещё {expiry - now} с`)
+	return true
+end
+
+-- Выдать заряды — одноразовые множители на забег.
+function DataService.AddCharge(player: Player, key: string, count: number): boolean
+	if count <= 0 or not isSaneAmount(count) then
+		warn(`[DataService] Отклонена выдача {count} зарядов "{key}": {player.Name}`)
+		return false
+	end
+
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local charges = data.purchases.charges
+	local balance = (charges[key] or 0) + count
+	charges[key] = balance
+
+	print(`[DataService] {player.Name} +{count} заряд {key}; осталось: {balance}`)
+	return true
+end
+
+--[[
+	Списать один заряд. Возвращает false, если списывать было нечего.
+
+	Проверка и списание идут подряд без yield — как в SpendCurrency, и по той же
+	причине: между ними не должен вклиниться второй забег того же игрока.
+]]
+function DataService.ConsumeCharge(player: Player, key: string): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local charges = data.purchases.charges
+	local balance = charges[key] or 0
+	if balance <= 0 then
+		return false
+	end
+
+	balance -= 1
+	-- Ноль не храним: пустые ключи копились бы в профиле у всех, кто хоть раз
+	-- что-то купил, и разбирать их потом было бы не по чему.
+	charges[key] = if balance > 0 then balance else nil
+
+	print(`[DataService] {player.Name} потратил заряд {key}; осталось: {balance}`)
+	return true
+end
+
+-- Убрать просроченные бустеры. Чистая уборка: на права игрока не влияет,
+-- потому что истёкший срок и так не считается действующим.
+function DataService.PruneBoosters(player: Player): ()
+	local data = DataService.GetProfile(player)
+	if not data then
+		return
+	end
+
+	local now = os.time()
+	for key, expiry in data.purchases.boosters do
+		if expiry <= now then
+			data.purchases.boosters[key] = nil
+		end
+	end
+end
+
+--[[
+	Проверить, попал ли чек в ХРАНИЛИЩЕ. Не в профиль в памяти — именно в то,
+	что уже сохранено: подтвердить покупку раньше сейва значит подарить товар
+	первому же вылету сервера.
+
+	LastSavedData — снимок последнего успешного сохранения, и у профиля, который
+	ещё ни разу не сохранялся после появления ветки receipts, её там просто нет.
+	Поэтому разбор идёт через any с проверками типов, а не по схеме.
+]]
+local function receiptSaved(profile: Profile, purchaseId: string): boolean
+	local saved = profile.LastSavedData :: any
+	if typeof(saved) ~= "table" then
+		return false
+	end
+
+	local purchases = saved.purchases
+	if typeof(purchases) ~= "table" then
+		return false
+	end
+
+	local receipts = purchases.receipts
+	if typeof(receipts) ~= "table" then
+		return false
+	end
+
+	return table.find(receipts, purchaseId) ~= nil
+end
+
+--[[
+	Выдача по чеку дев-продукта — единственный вход денег за Robux в игру.
+
+	grant вызывается ТОЛЬКО если этот чек ещё не обрабатывался. Он не получает
+	профиль: внутри ему доступны те же публичные операции DataService, что и
+	всем остальным, поэтому список того, что может изменить профиль, по-прежнему
+	целиком виден в этом файле.
+
+	Порядок действий и есть защита от двойной выдачи:
+		1. чек уже в кольце -> выдача пропускается, но подтверждение всё равно
+		   ждёт сейва: чек мог быть записан и не сохранён;
+		2. выдача и запись чека происходят в одном профиле, поэтому либо
+		   сохранятся вместе, либо не сохранятся вместе;
+		3. true возвращается только после того, как чек виден в сохранённых
+		   данных. До тех пор покупка считается необработанной, и Roblox
+		   пришлёт её снова — это правильный исход, а не потеря денег игрока.
+
+	Yield-ится (ждёт сейва), поэтому из release-хука вызывать нельзя.
+]]
+function DataService.ApplyReceipt(player: Player, purchaseId: string, grant: () -> boolean): boolean
+	local profile = profiles[player]
+	if not profile or not profile:IsActive() then
+		return false
+	end
+
+	local data = profile.Data :: ProfileData
+	local receipts = data.purchases.receipts
+
+	if table.find(receipts, purchaseId) == nil then
+		if not grant() then
+			warn(`[DataService] Выдача по чеку {purchaseId} не состоялась: {player.Name}`)
+			return false
+		end
+
+		table.insert(receipts, purchaseId)
+		while #receipts > Balance.Monetization.receiptLogSize do
+			table.remove(receipts, 1)
+		end
+	end
+
+	--[[
+		На выключении сервера ProfileStore сохраняет всех сам, и очередь запросов
+		там плотная: свой Save в этот момент только мешает. Ждать результата это
+		не отменяет — данные всё равно уедут, и чек в них будет виден.
+	]]
+	if not ProfileStore.IsClosing then
+		profile:Save()
+	end
+
+	local deadline = os.clock() + RECEIPT_SAVE_TIMEOUT
+	while os.clock() < deadline do
+		if receiptSaved(profile, purchaseId) then
+			return true
+		end
+		-- Сессия закрылась (игрок ушёл, сессию перехватил другой сервер):
+		-- ждать больше нечего, и подтверждать нечего.
+		if not profile:IsActive() then
+			return false
+		end
+		task.wait(RECEIPT_POLL)
+	end
+
+	warn(`[DataService] Чек {purchaseId} не сохранился за {RECEIPT_SAVE_TIMEOUT} с: {player.Name}`)
+	return false
 end
 
 --[[

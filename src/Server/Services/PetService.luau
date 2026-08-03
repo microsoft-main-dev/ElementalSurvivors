@@ -305,7 +305,9 @@ function PetService.BuildView(player: Player): Types.PetsView?
 		equipped = data.equippedPet,
 		collectionPower = power,
 		offlineRatePerHour = OfflineService.RateForPower(power),
-		offlineCapHours = OfflineService.CapHoursForPower(power),
+		-- С учётом бустеров (M7): панель обязана показывать тот потолок,
+		-- по которому реально считается копилка, иначе VIP выглядит нерабочим.
+		offlineCapHours = OfflineService.CapHoursFor(player, power),
 	}
 end
 

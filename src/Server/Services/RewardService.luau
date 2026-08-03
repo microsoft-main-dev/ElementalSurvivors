@@ -16,6 +16,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local BoostService = require(script.Parent.BoostService)
 local DataService = require(script.Parent.DataService)
 local ItemService = require(script.Parent.ItemService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
@@ -60,6 +61,29 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 	else
 		essence = Rewards.EssenceForRun(summary.kills, summary.time)
 		xp = Rewards.XpForRun(summary.kills, summary.time)
+	end
+
+	--[[
+		Множители за Robux (M7).
+
+		Бустер действует всё время, на которое куплен; заряд — один забег
+		и сгорает вместе с выплатой. Списание стоит здесь, а не в CombatService,
+		по той же причине, по которой сюда сходятся все три пути окончания
+		забега: выплата ровно одна, значит и заряд тратится ровно один.
+
+		Проверка essence > 0 не про длину забега (порога по времени владелец
+		отменил, заряд сгорает и на проигранном уровне), а про то, что
+		умножать вообще есть что: забег, за который не начислено ничего,
+		не должен съедать покупку.
+
+		Опыт персонажа не умножается: раздел 10 ТЗ запрещает донату давать силу.
+	]]
+	local essenceMult = 1
+	if essence > 0 then
+		essenceMult = BoostService.GetMultipliers(player).essence * BoostService.ConsumeRunCharge(player)
+		if essenceMult > 1 then
+			essence = math.floor(essence * essenceMult)
+		end
 	end
 
 	if essence > 0 then
@@ -132,6 +156,7 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		level = summary.level,
 		abilities = summary.abilities,
 		essence = essence,
+		essenceMult = essenceMult,
 		newBest = newBest,
 		currency = { essence = data.currency.essence, prisms = data.currency.prisms },
 

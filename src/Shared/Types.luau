@@ -481,6 +481,97 @@ export type LeaderboardEntry = {
 }
 
 --[[
+	Монетизация (раздел 9 ТЗ), M7.
+
+	Вечных геймпассов в игре нет решением владельца: всё, что продаётся за Robux, —
+	повторяемая покупка через дев-продукт. Отсюда главное следствие для всей ветки:
+	единственный вход денег в игру — ProcessReceipt, и защищать от двойной выдачи
+	надо ровно одно место, а не каждый товар по отдельности.
+]]
+export type ProductKind = "prisms" | "boost" | "charge" | "vip"
+
+--[[
+	Что именно выдаётся за покупку. Все четыре вида лежат в одной таблице,
+	потому что товар может быть только одним из них: пустая строка и ноль
+	означают «этот вид выдачи к товару не относится».
+]]
+export type ProductGrant = {
+	prisms: number,
+	boost: string, -- ключ бустера
+	seconds: number, -- на сколько продлевается бустер или VIP
+	charge: string, -- ключ заряда
+	count: number, -- сколько зарядов
+}
+
+export type ProductDef = {
+	key: string,
+	kind: ProductKind,
+	--[[
+		Числовой id из Creator Dashboard. Ноль означает «продукт ещё не заведён»:
+		лот показывается неактивным, а не роняет панель — ровно как ноль
+		в Config/Branding означает «ассета нет».
+	]]
+	productId: number,
+	displayName: string,
+	description: string,
+	grant: ProductGrant,
+}
+
+--[[
+	Бустер — временной множитель. Ничего не даёт в бою: раздел 10 ТЗ запрещает
+	донату давать силу, поэтому ускоряется только доход.
+]]
+export type BoostDef = {
+	key: string,
+	displayName: string,
+	essenceMult: number,
+	offlineCapMult: number,
+	wheelRate: number, -- во сколько раз быстрее готово колесо фортуны
+}
+
+-- Заряд — одноразовый множитель на один засчитанный забег.
+export type ChargeDef = {
+	key: string,
+	displayName: string,
+	essenceMult: number,
+}
+
+export type BoostMultipliers = {
+	essence: number,
+	offlineCap: number,
+	wheelRate: number,
+}
+
+export type StoreProductView = {
+	key: string,
+	displayName: string,
+	description: string,
+	productId: number,
+	-- false означает, что продукт не заведён в Creator Dashboard.
+	available: boolean,
+}
+
+export type StoreBoostView = {
+	key: string,
+	displayName: string,
+	secondsLeft: number,
+}
+
+export type StoreChargeView = {
+	key: string,
+	displayName: string,
+	count: number,
+}
+
+export type StoreView = {
+	products: { StoreProductView },
+	boosts: { StoreBoostView },
+	charges: { StoreChargeView },
+	-- Текущий множитель Essence со всеми бустерами; 1 означает «бустеров нет».
+	essenceMult: number,
+}
+
+--[[
 	Действия, которые игрок может запросить в лобби. Строка приходит с клиента,
 	поэтому список закрытый: всё, чего здесь нет, отбрасывается на входе.
 ]]
@@ -567,10 +658,37 @@ export type ProfileOffline = {
 	pending: number,
 }
 
+--[[
+	Покупки за Robux (M7).
+
+	Вечных геймпассов в игре нет, поэтому здесь лежит только то, чего не хранит
+	сам Roblox: сроки, заряды и список обработанных чеков.
+]]
 export type ProfilePurchases = {
+	--[[
+		Остаётся пустым навсегда. Ветка сохранена потому, что форма профиля
+		из раздела 6 ТЗ описана целиком: удалить её дешевле один раз, а вот
+		объяснить через полгода, куда она делась, — дороже.
+	]]
 	gamepasses: { [string]: boolean },
+	-- Батлпасс отложен за MVP решением владельца.
 	battlePass: { unknown },
+	-- Когда истекает VIP, серверное os.time(). Ноль — VIP не покупался.
 	vipUntil: number,
+	-- Ключ бустера -> время окончания. Просроченные записи чистятся при входе.
+	boosters: { [string]: number },
+	-- Ключ заряда -> сколько штук осталось.
+	charges: { [string]: number },
+	--[[
+		Кольцо последних обработанных purchaseId — то самое место, которым
+		покупка делается одноразовой: чек, который уже здесь, второй раз
+		не начисляет ничего.
+
+		Кольцо, а не бесконечный список: Roblox перестаёт слать чек сразу после
+		того, как выдача подтверждена, поэтому хранить их вечно незачем, а
+		профиль растёт бесконечно только у тех, кто платит больше всех.
+	]]
+	receipts: { string },
 }
 
 export type ProfileData = {
@@ -644,7 +762,10 @@ export type RunResult = {
 	kills: number,
 	level: number, -- уровень внутри забега, он не сохраняется
 	abilities: { AbilityView },
-	essence: number, -- начислено за этот забег
+	essence: number, -- начислено за этот забег, уже с множителем
+	-- Множитель бустеров и заряда (M7); 1 означает «покупок не было».
+	-- Нужен на экране: без него заплативший не видит, что покупка сработала.
+	essenceMult: number,
 	newBest: boolean, -- время забега стало рекордом
 	currency: Currency, -- баланс уже после начисления
 

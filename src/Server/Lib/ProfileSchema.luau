@@ -106,10 +106,21 @@ local template: ProfileData = {
 		pending = 0,
 	},
 
+	--[[
+		Покупки за Robux (M7). gamepasses и battlePass остаются пустыми:
+		вечных пасов в игре нет решением владельца, батлпасс отложен за MVP.
+
+		boosters, charges и receipts появились у профилей, которые уже
+		существуют. Настоящей миграции им не нужно — Reconcile дольёт все три
+		дефолтом при следующей загрузке, поэтому Version не поднят.
+	]]
 	purchases = {
 		gamepasses = {},
 		battlePass = {},
 		vipUntil = 0,
+		boosters = {},
+		charges = {},
+		receipts = {},
 	},
 
 	stats = {

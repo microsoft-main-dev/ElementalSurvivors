@@ -285,7 +285,13 @@ local function show(result: Types.RunResult): ()
 
 	local reward = rewardLabel
 	if reward then
-		reward.Text = `+{result.essence} Essence   (total {result.currency.essence})`
+		--[[
+			Множитель называется вслух (M7). Без него человек, купивший x10,
+			видит просто большое число и не знает, сработала покупка или ему
+			повезло с картами: сама сумма за забег и так скачет вдвое.
+		]]
+		local boost = if result.essenceMult > 1 then `   ·   x{result.essenceMult} boost` else ""
+		reward.Text = `+{result.essence} Essence   (total {result.currency.essence}){boost}`
 	end
 
 	local meta = metaLabel

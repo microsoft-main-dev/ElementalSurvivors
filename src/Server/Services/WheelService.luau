@@ -2,8 +2,10 @@
 --[[
 	WheelService — колесо фортуны (раздел 4 ТЗ), M6.
 
-	Раз в 24 часа бесплатно. Дополнительные прокрутки за донатную валюту —
-	это M7: Prisms до тех пор не заработать, и продавать за них нечего.
+	Раз в 24 часа бесплатно. Раздел 4 ТЗ предлагал продавать дополнительные
+	прокрутки за Prisms; в M7 это сделано иначе — VIP укорачивает период вдвое.
+	Причина в решении владельца: вечных покупок в игре нет, а разовая прокрутка
+	за валюту и подписка на ускорение — это два разных товара, и второй уже есть.
 
 	Сутки считаются по серверному os.time() и по отметке в профиле. Клиент
 	не сообщает ни своего времени, ни того, крутил ли он сегодня: единственное,
@@ -21,6 +23,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local BoostService = require(script.Parent.BoostService)
 local DataService = require(script.Parent.DataService)
 local Net = require(Shared.Net)
 local Types = require(Shared.Types)
@@ -37,6 +40,14 @@ function WheelService.NextSpinIn(player: Player): number
 		return Balance.Daily.wheelPeriod
 	end
 
+	--[[
+		VIP (M7) укорачивает период вдвое. Именно так, а не «вторая прокрутка
+		в сутки»: обещание для игрока то же самое, а в профиле не заводится
+		второй счётчик со своим сбросом — период и так считается от отметки
+		последней прокрутки, и делить его дешевле, чем считать штуки.
+	]]
+	local period = Balance.Daily.wheelPeriod / BoostService.GetMultipliers(player).wheelRate
+
 	local elapsed = os.time() - data.daily.lastWheelSpin
 	--[[
 		Отрицательное значение означает отметку из будущего — часы разошлись
@@ -45,10 +56,10 @@ function WheelService.NextSpinIn(player: Player): number
 		бесплатные прокрутки без ограничения.
 	]]
 	if elapsed < 0 then
-		return Balance.Daily.wheelPeriod
+		return period
 	end
 
-	return math.max(Balance.Daily.wheelPeriod - elapsed, 0)
+	return math.max(period - elapsed, 0)
 end
 
 function WheelService.Spin(player: Player): (boolean, string?)

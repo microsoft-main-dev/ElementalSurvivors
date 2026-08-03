@@ -31,6 +31,7 @@
 	Публичный API:
 		OfflineService.RateForPower(power)      -> number
 		OfflineService.CapHoursForPower(power)  -> number
+		OfflineService.CapHoursFor(player, power) -> number
 		OfflineService.Accrue(player)           -> number
 		OfflineService.Claim(player)            -> number
 		OfflineService.PushReport(player)
@@ -42,6 +43,7 @@ local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local BoostService = require(script.Parent.BoostService)
 local DataService = require(script.Parent.DataService)
 local Net = require(Shared.Net)
 local PetService = require(script.Parent.PetService)
@@ -84,6 +86,18 @@ function OfflineService.CapHoursForPower(power: number): number
 end
 
 --[[
+	То же с учётом купленных бустеров (M7): VIP удваивает потолок копилки.
+
+	Отдельной функцией, а не аргументом у предыдущей, потому что потолок нужен
+	в трёх местах и везде с бустером: разделение оставило бы возможность
+	посчитать «честный» потолок и тихо обделить того, кто заплатил.
+]]
+function OfflineService.CapHoursFor(player: Player, power: number): number
+	local mult = BoostService.GetMultipliers(player).offlineCap
+	return OfflineService.CapHoursForPower(power) * mult
+end
+
+--[[
 	Отладка: изобразить, что игрока не было Balance.Debug.offlineTestHours часов,
 	чтобы проверять механику, не выжидая эти часы по-настоящему.
 
@@ -120,7 +134,7 @@ function OfflineService.Accrue(player: Player): number
 
 	local power = PetService.CollectionPower(player)
 	local rate = OfflineService.RateForPower(power)
-	local capHours = OfflineService.CapHoursForPower(power)
+	local capHours = OfflineService.CapHoursFor(player, power)
 	local lastSeen = data.offline.lastSeen
 
 	local elapsed = forcedElapsed()
@@ -213,7 +227,7 @@ function OfflineService.PushReport(player: Player): ()
 		seconds = gap,
 		essence = pending,
 		ratePerHour = OfflineService.RateForPower(power),
-		capHours = OfflineService.CapHoursForPower(power),
+		capHours = OfflineService.CapHoursFor(player, power),
 	}
 	remote:FireClient(player, report)
 end

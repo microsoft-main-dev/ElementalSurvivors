@@ -31,6 +31,7 @@ local ItemService = require(script.Parent.ItemService)
 local Net = require(Shared.Net)
 local OfflineService = require(script.Parent.OfflineService)
 local PetService = require(script.Parent.PetService)
+local PurchaseService = require(script.Parent.PurchaseService)
 local QuestService = require(script.Parent.QuestService)
 local RateLimiter = require(Shared.Util.RateLimiter)
 local TalentService = require(script.Parent.TalentService)
@@ -139,6 +140,8 @@ local function handle(player: Player, action: string, target: string?, extra: un
 		PetService.PushView(player)
 		TalentService.PushView(player)
 		ItemService.PushView(player)
+		-- Бустеры могли истечь, пока игрок был в бою.
+		PurchaseService.PushView(player)
 		-- Сутки могли смениться, пока игрок был в бою.
 		QuestService.EnsureFresh(player)
 		QuestService.PushView(player)
