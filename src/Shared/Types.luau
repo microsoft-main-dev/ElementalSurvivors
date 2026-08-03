@@ -139,7 +139,63 @@ export type RunSnapshot = {
 }
 
 -- Причина завершения забега.
-export type RunEndReason = "Death" | "Left"
+export type RunEndReason = "Death" | "Left" | "Victory"
+
+--[[
+	Режим забега (раздел 5.1 ТЗ), M6.
+
+	Story — сюжетный уровень: фиксированная длительность, затем босс, победа
+	открывает следующий уровень. Endless — бесконечный режим, награда и опыт
+	считаются по убийствам и времени.
+]]
+export type RunMode = "Story" | "Endless"
+
+--[[
+	Фаза сюжетного забега.
+
+	Survival — обычный бой по расписанию волн.
+	Sweep    — спавн прекращён, добиваем оставшихся; босс ждёт пустой арены.
+	Boss     — бой с боссом.
+	Done     — босс убит, забег завершается.
+
+	Sweep существует потому, что ожидание полной зачистки подвешивает забег,
+	если последний враг недостижим. В этой фазе оставшиеся стягиваются
+	к игроку, а по таймауту убираются принудительно.
+]]
+export type StagePhase = "Survival" | "Sweep" | "Boss" | "Done"
+
+--[[
+	Локация (раздел 5.1 ТЗ). Двадцать локаций — это данные; конкретный уровень
+	внутри локации собирается формулой, а не выписывается руками.
+]]
+export type LocationDef = {
+	key: string,
+	displayName: string,
+	levels: number, -- сколько уровней в этой локации
+	palette: string, -- ключ палитры арены
+	enemyTypes: { string }, -- ключи из Config/Enemies
+	bossKeys: { string }, -- боссовые архетипы, чередуются каждые 5 уровней
+}
+
+--[[
+	Собранный сюжетный уровень. Возвращается Stages.Get(index) и нигде
+	не хранится: это чистая функция от номера уровня и таблицы локаций.
+]]
+export type StageDef = {
+	index: number, -- сквозной номер, 1..500
+	location: LocationDef,
+	indexInLocation: number,
+	isLocationFinal: boolean, -- финал локации даёт гарантированный предмет
+	duration: number, -- секунд фазы выживания
+	enemyHealthMult: number,
+	enemyDamageMult: number,
+	enemySpeedMult: number,
+	enemyTypes: { string },
+	bossKey: string,
+	bossHealth: number,
+	essence: number, -- награда за победу
+	xp: number,
+}
 
 --[[
 	Питомцы (разделы 6 и 6.1 ТЗ). Питомец — это класс: он задаёт стартовую
