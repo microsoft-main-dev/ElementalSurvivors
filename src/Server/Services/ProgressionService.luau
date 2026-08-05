@@ -21,19 +21,23 @@
 		ProgressionService.AddXp(slot, amount)
 		ProgressionService.IsPaused(slot)   -> boolean
 		ProgressionService.GetState(slot)   -> { level, xp, xpToNext }
+		ProgressionService.DebugMaxLevel(slot)
 ]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
 local AbilityService = require(script.Parent.AbilityService)
 local Balance = require(Shared.Config.Balance)
+local Cards = require(Shared.Config.Cards)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
 local RateLimiter = require(Shared.Util.RateLimiter)
 local Types = require(Shared.Types)
+local XpCurve = require(Shared.Util.XpCurve)
 
 type LevelUpCard = Types.LevelUpCard
 
@@ -84,17 +88,41 @@ end
 local function buildOffer(sim: Sim): { LevelUpCard }
 	local candidates: { LevelUpCard } = {}
 
+	--[[
+		Улучшения того, что уже есть. Способность на потолке в кандидаты
+		не попадает: карточка «взять то, что уже максимум» — это мусор,
+		а к концу забега таких было бы большинство.
+	]]
 	for _, view in AbilityService.GetViews(sim.slot) do
 		local def = Abilities.ByKey[view.key]
-		if def and view.level < #def.levels then
-			table.insert(candidates, { abilityKey = view.key, isNew = false, level = view.level + 1 })
+		if def and view.level < Abilities.MaxLevel then
+			table.insert(candidates, {
+				abilityKey = view.key,
+				isNew = false,
+				level = view.level + 1,
+				rarity = Cards.Roll(random).key,
+			})
 		end
 	end
 
+	--[[
+		Новые способности — только пока есть свободный слот, и только базовые:
+		уникальную способность питомца карточкой не выдают, её приносят с собой.
+	]]
 	if AbilityService.CanTakeMore(sim.slot) then
-		for _, def in Abilities.List do
+		for _, def in Abilities.BaseList do
 			if AbilityService.GetLevel(sim.slot, def.key) == 0 then
-				table.insert(candidates, { abilityKey = def.key, isNew = true, level = 1 })
+				--[[
+					Первый уровень редкости не имеет: он ничего не множит,
+					способности ещё нет. Показывать «Legendary» на карточке,
+					которая даёт ровно то же, что обычная, — обман.
+				]]
+				table.insert(candidates, {
+					abilityKey = def.key,
+					isNew = true,
+					level = 1,
+					rarity = Cards.Common.key,
+				})
 			end
 		end
 	end
@@ -118,7 +146,9 @@ local function applyCard(sim: Sim, card: LevelUpCard): ()
 	if card.isNew then
 		AbilityService.Grant(sim.slot, card.abilityKey)
 	else
-		AbilityService.LevelUp(sim.slot, card.abilityKey)
+		-- Множитель берётся из карточки, которую запомнил сервер, а не из того,
+		-- что прислал клиент: клиентские данные в применении не участвуют вовсе.
+		AbilityService.LevelUp(sim.slot, card.abilityKey, Cards.MultiplierFor(card.rarity))
 	end
 end
 
@@ -164,7 +194,7 @@ local function advanceLevels(sim: Sim): ()
 	if sim.xp >= sim.xpToNext then
 		sim.xp -= sim.xpToNext
 		sim.level += 1
-		sim.xpToNext = Balance.XpForLevel(sim.level)
+		sim.xpToNext = XpCurve.ForLevel(sim.level)
 		offerLevelUp(sim)
 	end
 end
@@ -210,13 +240,60 @@ function ProgressionService.Resolve(player: Player, index: number): boolean
 	if sim.xp >= sim.xpToNext then
 		sim.xp -= sim.xpToNext
 		sim.level += 1
-		sim.xpToNext = Balance.XpForLevel(sim.level)
+		sim.xpToNext = XpCurve.ForLevel(sim.level)
 		offerLevelUp(sim)
 	else
 		setPaused(sim, false)
 	end
 
 	return true
+end
+
+--[[
+	Тестовая кнопка "BossFight" в лобби (M7): выдаёт билд максимального
+	уровня — все способности взяты и подняты до предела — одним вызовом,
+	без единого клика по карточке и без паузы боя на выбор.
+
+	Studio-only по тому же приёму, что у StageService.DebugRushToBoss.
+]]
+function ProgressionService.DebugMaxLevel(slot: number): ()
+	if not RunService:IsStudio() then
+		return
+	end
+
+	local sim = sims[slot]
+	if not sim then
+		return
+	end
+
+	local upgrades = 0
+
+	while AbilityService.CanTakeMore(slot) do
+		local key: string? = nil
+		for _, def in Abilities.BaseList do
+			if AbilityService.GetLevel(slot, def.key) == 0 then
+				key = def.key
+				break
+			end
+		end
+		if not key then
+			break
+		end
+		AbilityService.Grant(slot, key)
+		upgrades += 1
+	end
+
+	-- Обычной редкостью: тестовая кнопка проверяет боссов, а не везение.
+	for _, view in AbilityService.GetViews(slot) do
+		while AbilityService.GetLevel(slot, view.key) < Abilities.MaxLevel do
+			AbilityService.LevelUp(slot, view.key, 1)
+			upgrades += 1
+		end
+	end
+
+	sim.level = 1 + upgrades
+	sim.xp = 0
+	sim.xpToNext = XpCurve.ForLevel(sim.level)
 end
 
 function ProgressionService.IsPaused(slot: number): boolean
@@ -227,7 +304,7 @@ end
 function ProgressionService.GetState(slot: number): State
 	local sim = sims[slot]
 	if not sim then
-		return { level = 1, xp = 0, xpToNext = Balance.XpForLevel(1) }
+		return { level = 1, xp = 0, xpToNext = XpCurve.ForLevel(1) }
 	end
 	return { level = sim.level, xp = sim.xp, xpToNext = sim.xpToNext }
 end
@@ -238,7 +315,7 @@ function ProgressionService.StartRun(slot: number, player: Player): ()
 		player = player,
 		level = 1,
 		xp = 0,
-		xpToNext = Balance.XpForLevel(1),
+		xpToNext = XpCurve.ForLevel(1),
 		paused = false,
 		offer = nil,
 		offerToken = 0,
@@ -261,6 +338,15 @@ function ProgressionService.Init(): ()
 end
 
 function ProgressionService.Start(): ()
+	--[[
+		Кривая опыта выводится из расписания волн, и увидеть, что из этого
+		вышло, иначе негде. Печатается только в Studio и только при старте:
+		это отчёт о расчёте, а не отладка боя.
+	]]
+	if RunService:IsStudio() then
+		print(XpCurve.Describe())
+	end
+
 	local remote = choiceRemote
 	if not remote then
 		return

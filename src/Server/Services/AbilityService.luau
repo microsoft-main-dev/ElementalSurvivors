@@ -6,11 +6,17 @@
 	строка данных в Config/Abilities: чтобы добавить седьмую способность,
 	этот файл трогать не нужно.
 
-	Формы в M2:
+	Формы:
 		Orbit      орбы вращаются вокруг игрока и бьют то, что задевают
 		Projectile снаряды летят в ближайших врагов, пробивают насквозь
 		Aura       постоянный круг вокруг игрока, урон по кулдауну
 		Nova       вспышка от игрока на весь радиус разом
+		Cone       клин в сторону ближайшей цели
+		Chain      молния, прыгающая с врага на врага с затуханием
+
+	КАЖДАЯ ФОРМА ОБЯЗАНА УМЕТЬ БИТЬ БОССА. На его фазе арена пуста, и форма,
+	которая ищет цели только среди обычных врагов, промолчит весь боссфайт —
+	это уже было багом у снарядов, и с Cone и Chain повторить его особенно легко.
 
 	Урон, цели и убийства считает только сервер. На клиент уходит лишь то,
 	что нельзя вывести из состояния: рождение снаряда и момент вспышки.
@@ -25,8 +31,8 @@
 	Публичный API:
 		AbilityService.StartRun(slot, player, loadout)
 		AbilityService.StopRun(slot)
-		AbilityService.Grant(slot, key)        -> boolean
-		AbilityService.LevelUp(slot, key)      -> boolean
+		AbilityService.Grant(slot, key)              -> boolean
+		AbilityService.LevelUp(slot, key, multiplier) -> boolean
 		AbilityService.GetViews(slot)          -> { AbilityView }
 		AbilityService.CanTakeMore(slot)       -> boolean
 		AbilityService.Tick(slot, dt, playerLocal)
@@ -48,6 +54,16 @@ type AbilityView = Types.AbilityView
 type Runtime = {
 	def: AbilityDef,
 	level: number,
+	--[[
+		Накопленное за забег и посчитанные из него характеристики.
+
+		Из номера уровня характеристики больше не выводятся: карточки падают
+		с разной редкостью, и один и тот же девятый уровень у двух игроков
+		разный. stats пересчитываются в момент повышения, а не каждый кадр —
+		между повышениями в них нечему меняться.
+	]]
+	bonuses: Types.AbilityBonuses,
+	stats: Types.AbilityLevel,
 	timer: number,
 	phase: number,
 	-- Множители от питомца и талантов: 1, если стихия способности им чужая.
@@ -122,6 +138,9 @@ end
 ]]
 local BOSS_HIT_KEY = 0
 
+-- Насколько больше целей запрашивает цепь, чем у неё звеньев (см. tickChain).
+local SPARE_CHAIN_TARGETS = 4
+
 --[[
 	Урон боссу от области способности.
 
@@ -167,7 +186,7 @@ end
 	в бесконечный урон в упор.
 ]]
 local function tickOrbit(sim: Sim, runtime: Runtime, dt: number, playerLocal: Vector3, now: number): ()
-	local data = runtime.def.levels[runtime.level]
+	local data = runtime.stats
 	local count = data.count :: number
 	local radius = data.radius :: number
 	local hitRadius = data.hitRadius :: number
@@ -209,7 +228,7 @@ end
 
 -- Aura — постоянный круг вокруг игрока, урон по всем внутри по кулдауну.
 local function tickAura(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
-	local data = runtime.def.levels[runtime.level]
+	local data = runtime.stats
 	local damage = data.damage * runtime.damageMult
 	local radius = data.radius :: number
 	local hits = EnemyService.CollectHits(sim.slot, playerLocal, radius, sim.hits)
@@ -222,7 +241,7 @@ end
 
 -- Nova — то же по геометрии, но разовая вспышка, и клиент рисует волну.
 local function tickNova(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
-	local data = runtime.def.levels[runtime.level]
+	local data = runtime.stats
 	local damage = data.damage * runtime.damageMult
 	local radius = data.radius :: number
 	local hits = EnemyService.CollectHits(sim.slot, playerLocal, radius, sim.hits)
@@ -237,21 +256,225 @@ local function tickNova(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
 end
 
 --[[
-	Projectile — залп в ближайших врагов. Если целей меньше, чем снарядов,
-	лишние летят веером, а не пропадают: способность не должна простаивать
-	из-за того, что рядом один враг.
+	Направление на ближайшую цель: сначала босс, потом ближайший враг.
+
+	Босс первым по той же причине, по которой он первая цель у снарядов:
+	на его фазе арена пуста, и форма, ищущая только обычных врагов, не найдёт
+	никого и промолчит весь боссфайт.
+
+	Возвращает единичный вектор или nil, если целей нет вовсе.
+]]
+local function aimDirection(sim: Sim, playerLocal: Vector3): Vector3?
+	local target = BossService.GetPosition(sim.slot)
+
+	if not target then
+		local found =
+			EnemyService.FindNearest(sim.slot, playerLocal, Balance.Combat.abilitySearchRadius, 1, sim.targets)
+		if found > 0 then
+			target = EnemyService.GetPosition(sim.slot, sim.targets[1])
+		end
+	end
+
+	if not target then
+		return nil
+	end
+
+	local delta = target - playerLocal
+	local length = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
+	if length <= 1e-4 then
+		return Vector3.new(1, 0, 0)
+	end
+
+	return Vector3.new(delta.X / length, 0, delta.Z / length)
+end
+
+--[[
+	Cone — клин в сторону ближайшей цели.
+
+	Геометрия: круг радиусом radius вокруг игрока, из которого остаётся только
+	то, что попало в угол angle. Круг берётся тем же CollectHits, что и у ауры,
+	потому что он единственный учитывает радиус самого врага; угол проверяется
+	после — по направлению на центр врага.
+]]
+local function tickCone(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
+	local direction = aimDirection(sim, playerLocal)
+	if not direction then
+		return
+	end
+
+	local data = runtime.stats
+	local damage = data.damage * runtime.damageMult
+	local radius = data.radius :: number
+	-- Половина угла в косинусе: сравнение скалярного произведения дешевле
+	-- и не требует арктангенса на каждого врага в толпе.
+	local threshold = math.cos(math.rad((data.angle :: number) / 2))
+
+	local hits = EnemyService.CollectHits(sim.slot, playerLocal, radius, sim.hits)
+	for index = 1, hits do
+		local id = sim.hits[index]
+		local position = EnemyService.GetPosition(sim.slot, id)
+		if not position then
+			continue
+		end
+
+		local delta = position - playerLocal
+		local length = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
+		--[[
+			Враг вплотную считается задетым всегда: у стоящего в самом игроке
+			направление не определено, и проверять угол не по чему.
+		]]
+		if length > 1e-3 then
+			local dot = (delta.X * direction.X + delta.Z * direction.Z) / length
+			if dot < threshold then
+				continue
+			end
+		end
+
+		local _, dealt = EnemyService.Damage(sim.slot, id, damage)
+		runtime.damage += dealt
+	end
+
+	--[[
+		Босс проверяется отдельно и по тому же правилу. Радиус босса огромный,
+		поэтому угол считается до его центра: клин, задевший край туши,
+		но не смотрящий на неё, бить не должен.
+	]]
+	local bossPosition = BossService.GetPosition(sim.slot)
+	if bossPosition then
+		local delta = bossPosition - playerLocal
+		local length = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
+		local dot = if length > 1e-3 then (delta.X * direction.X + delta.Z * direction.Z) / length else 1
+		if dot >= threshold then
+			damageBoss(sim, runtime, playerLocal, radius, damage)
+		end
+	end
+
+	sim.fxQueue[1] = { x = playerLocal.X, z = playerLocal.Z, dx = direction.X, dz = direction.Z }
+	sendFx(sim, "Cone", runtime.def.key, 1)
+end
+
+--[[
+	Chain — молния, прыгающая с врага на врага.
+
+	Каждое следующее звено ищется вокруг ПРЕДЫДУЩЕЙ цели, а не вокруг игрока,
+	и уже задетые пропускаются: иначе цепь била бы одного и того же врага
+	туда-сюда все свои звенья.
+
+	Босс — допустимое звено, и на пустой арене он же первое: без этого цепь
+	молчала бы весь боссфайт, как это уже было со снарядами.
+]]
+local function tickChain(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
+	local data = runtime.stats
+	local links = data.count :: number
+	local jumpRadius = data.radius :: number
+	local falloff = data.falloff :: number
+
+	local damage = data.damage * runtime.damageMult
+	local from = playerLocal
+	local queued = 0
+	local bossHit = false
+
+	-- Кого уже задели: в цепи из пяти звеньев проверка идёт по маленькой
+	-- таблице, и заводить ради неё что-то сложнее незачем.
+	local visited: { [number]: boolean } = {}
+
+	for _ = 1, links do
+		local nextPosition: Vector3? = nil
+		local nextId: number? = nil
+
+		--[[
+			Босс имеет приоритет ровно один раз: он один, и оставлять его
+			цепи на второй заход означало бы, что на пустой арене она не найдёт
+			вообще ничего.
+		]]
+		if not bossHit then
+			local bossPosition = BossService.GetPosition(sim.slot)
+			if bossPosition and (bossPosition - from).Magnitude <= jumpRadius + Balance.Combat.playerRadius then
+				nextPosition = bossPosition
+			end
+		end
+
+		if not nextPosition then
+			--[[
+				Кандидатов запрашиваем с запасом: ближайшими к последнему звену
+				почти всегда оказываются предыдущие звенья, и без запаса цепь
+				из пяти обрывалась бы на втором-третьем прыжке.
+			]]
+			local wanted = links + SPARE_CHAIN_TARGETS
+			local found = EnemyService.FindNearest(sim.slot, from, jumpRadius, wanted, sim.targets)
+			for index = 1, found do
+				local id = sim.targets[index]
+				if not visited[id] then
+					nextId = id
+					nextPosition = EnemyService.GetPosition(sim.slot, id)
+					break
+				end
+			end
+		end
+
+		if not nextPosition then
+			break
+		end
+
+		if nextId then
+			visited[nextId] = true
+			local _, dealt = EnemyService.Damage(sim.slot, nextId, damage)
+			runtime.damage += dealt
+		else
+			bossHit = true
+			damageBoss(sim, runtime, nextPosition, 1, damage)
+		end
+
+		--[[
+			Отрезок звена: в поля направления кладётся ПОЛНЫЙ вектор до цели,
+			а не единичный. Клиент рисует по нему отрезок нужной длины, и новый
+			формат пакета эффектов ради этого не понадобился.
+		]]
+		queued += 1
+		sim.fxQueue[queued] = {
+			x = from.X,
+			z = from.Z,
+			dx = nextPosition.X - from.X,
+			dz = nextPosition.Z - from.Z,
+		}
+
+		from = nextPosition
+		damage *= falloff
+	end
+
+	sendFx(sim, "Chain", runtime.def.key, queued)
+end
+
+--[[
+	Projectile — залп по целям. Если целей меньше, чем снарядов, лишние летят
+	веером, а не пропадают: способность не должна простаивать из-за того,
+	что рядом один враг.
+
+	БОСС — ЦЕЛЬ НОМЕР ОДИН, И ЭТО НЕ ПРИОРИТЕТ, А ИСПРАВЛЕНИЕ.
+
+	Цели искались только среди врагов из плоских массивов, а босс в них
+	не лежит. На его фазе арена пуста (StageService зачищает её перед выходом
+	босса), поэтому залп не находил ни одной цели и не вылетал вовсе:
+	все направленные способности молча простаивали весь боссфайт, и игрок
+	добивал босса только тем, что бьёт по площади. Попадать по боссу снаряды
+	умели всегда (stepProjectiles), их туда никто не отправлял.
+
+	Веером по боссу не стреляем: он один и большой, и «лишний» снаряд,
+	отклонённый на двадцать градусов, — это просто промах.
 ]]
 local function fireProjectiles(sim: Sim, runtime: Runtime, playerLocal: Vector3): ()
-	local data = runtime.def.levels[runtime.level]
+	local data = runtime.stats
 	local count = data.count :: number
 
+	local bossPosition = BossService.GetPosition(sim.slot)
 	local found =
 		EnemyService.FindNearest(sim.slot, playerLocal, Balance.Combat.abilitySearchRadius, count, sim.targets)
-	if found == 0 then
+	if found == 0 and not bossPosition then
 		return
 	end
 
 	local queued = 0
+	local extra = 0
 	local spread = math.pi / 9
 
 	for index = 1, count do
@@ -260,8 +483,26 @@ local function fireProjectiles(sim: Sim, runtime: Runtime, playerLocal: Vector3)
 			break
 		end
 
+		--[[
+			Кому этот снаряд: первый — боссу, если он жив, остальные разбирают
+			ближайших врагов. Не хватило врагов — остаток летит в босса, а если
+			босса нет, расходится веером от направления на последнюю цель.
+		]]
+		local enemyIndex = if bossPosition then index - 1 else index
+		-- Босс — цель по умолчанию: и для первого снаряда, и для тех,
+		-- которым не хватило врагов. Без босса значение просто nil.
+		local targetPosition: Vector3? = bossPosition
+		local fanOffset = 0
+
+		if enemyIndex >= 1 and enemyIndex <= found then
+			targetPosition = EnemyService.GetPosition(sim.slot, sim.targets[enemyIndex])
+		elseif not bossPosition and found > 0 then
+			targetPosition = EnemyService.GetPosition(sim.slot, sim.targets[found])
+			extra += 1
+			fanOffset = extra * spread * (if extra % 2 == 0 then 1 else -1)
+		end
+
 		local direction: Vector3
-		local targetPosition = EnemyService.GetPosition(sim.slot, sim.targets[math.min(index, found)])
 		if targetPosition then
 			local delta = targetPosition - playerLocal
 			local length = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
@@ -272,10 +513,8 @@ local function fireProjectiles(sim: Sim, runtime: Runtime, playerLocal: Vector3)
 			direction = Vector3.new(1, 0, 0)
 		end
 
-		-- Снаряды сверх числа целей расходятся веером от направления на цель.
-		if index > found then
-			local offset = (index - found) * spread * (if index % 2 == 0 then 1 else -1)
-			local cos, sin = math.cos(offset), math.sin(offset)
+		if fanOffset ~= 0 then
+			local cos, sin = math.cos(fanOffset), math.sin(fanOffset)
 			direction = Vector3.new(direction.X * cos - direction.Z * sin, 0, direction.X * sin + direction.Z * cos)
 		end
 
@@ -361,7 +600,7 @@ function AbilityService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 	local now = os.clock()
 
 	for _, runtime in sim.abilities do
-		local data = runtime.def.levels[runtime.level]
+		local data = runtime.stats
 		local shape = runtime.def.shape
 
 		-- У Orbit нет «срабатывания»: он бьёт постоянным контактом,
@@ -384,6 +623,10 @@ function AbilityService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 				tickNova(sim, runtime, playerLocal)
 			elseif shape == "Projectile" then
 				fireProjectiles(sim, runtime, playerLocal)
+			elseif shape == "Cone" then
+				tickCone(sim, runtime, playerLocal)
+			elseif shape == "Chain" then
+				tickChain(sim, runtime, playerLocal)
 			end
 		end
 	end
@@ -406,11 +649,14 @@ function AbilityService.Grant(slot: number, key: string): boolean
 	end
 
 	local cooldownMult = sim.elementCooldown[def.element] or 1
+	local bonuses = Abilities.NewBonuses()
 
 	local runtime: Runtime = {
 		def = def,
 		level = 1,
-		timer = def.levels[1].cooldown * cooldownMult,
+		bonuses = bonuses,
+		stats = Abilities.Stats(def, bonuses),
+		timer = def.base.cooldown * cooldownMult,
 		phase = 0,
 		-- Множители снимаются здесь, а не при каждом ударе: за забег они
 		-- не меняются, а забыть про бонус в одной из форм — легко.
@@ -424,18 +670,27 @@ function AbilityService.Grant(slot: number, key: string): boolean
 	return true
 end
 
-function AbilityService.LevelUp(slot: number, key: string): boolean
+--[[
+	Повышение уровня.
+
+	multiplier — редкость взятой карточки: она усиливает прибавку обычного
+	уровня и ничего не значит на рубеже. Решает её ProgressionService, здесь
+	только применение — способность не должна знать, откуда взялось число.
+]]
+function AbilityService.LevelUp(slot: number, key: string, multiplier: number): boolean
 	local sim = sims[slot]
 	if not sim then
 		return false
 	end
 
 	local runtime = sim.byKey[key]
-	if not runtime or runtime.level >= #runtime.def.levels then
+	if not runtime or runtime.level >= Abilities.MaxLevel then
 		return false
 	end
 
 	runtime.level += 1
+	Abilities.ApplyUpgrade(runtime.def, runtime.level, multiplier, runtime.bonuses)
+	runtime.stats = Abilities.Stats(runtime.def, runtime.bonuses)
 	return true
 end
 
@@ -456,7 +711,7 @@ function AbilityService.GetViews(slot: number): { AbilityView }
 			cooldown = if isOrbit then 0 else math.max(runtime.timer, 0),
 			-- С множителем: иначе иконка в HUD затемнялась бы по «бумажному»
 			-- кулдауну и расходилась бы с тем, как способность реально бьёт.
-			maxCooldown = if isOrbit then 0 else runtime.def.levels[runtime.level].cooldown * runtime.cooldownMult,
+			maxCooldown = if isOrbit then 0 else runtime.stats.cooldown * runtime.cooldownMult,
 			phase = runtime.phase,
 			damage = math.floor(runtime.damage),
 		}

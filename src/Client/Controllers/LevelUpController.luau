@@ -19,8 +19,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
+local Cards = require(Shared.Config.Cards)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
+local SoundController = require(script.Parent.SoundController)
 local Types = require(Shared.Types)
 
 type LevelUpCard = Types.LevelUpCard
@@ -109,6 +111,7 @@ local function choose(index: number): ()
 		return
 	end
 	awaitingChoice = false
+	SoundController.PlaySfx("CardChosen")
 
 	local remote = choiceRemote
 	if remote then
@@ -141,9 +144,14 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	corner.CornerRadius = UDim.new(0, 12)
 	corner.Parent = button
 
+	--[[
+		Контур карточки — цвет РЕДКОСТИ, а не стихии: редкость решает, сколько
+		даст карточка, и заметить её надо раньше, чем прочитать текст. Стихия
+		при этом остаётся в шапке и в названии.
+	]]
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = color
-	stroke.Thickness = 3
+	stroke.Color = Cards.ColorFor(card.rarity)
+	stroke.Thickness = if card.rarity == Cards.Common.key then 3 else 5
 	stroke.Parent = button
 
 	local header = Instance.new("Frame")
@@ -160,7 +168,15 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	badge.Size = UDim2.fromScale(1, 1)
 	badge.BackgroundTransparency = 1
 	badge.Font = Enum.Font.GothamBold
-	badge.Text = if card.isNew then "NEW" else `LEVEL {card.level}`
+	--[[
+		Редкость подписана ВСЕГДА, включая обычную. Иначе игрок не понимает,
+		что редкость вообще существует, пока ему не выпадет редкая, — и не может
+		сравнить: «Common» на соседней карточке объясняет, чем хороша «Rare»,
+		лучше любого объяснения.
+	]]
+	local rarity = Cards.ByKey[card.rarity]
+	local rarityText = if rarity then `  ·  {rarity.displayName}` else ""
+	badge.Text = if card.isNew then "NEW" else `LEVEL {card.level}{rarityText}`
 	badge.TextColor3 = Palette.UI.background
 	badge.TextScaled = true
 	badge.Parent = header
@@ -187,7 +203,15 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	description.Size = UDim2.fromScale(0.86, 0.34)
 	description.BackgroundTransparency = 1
 	description.Font = Enum.Font.Gotham
-	description.Text = if def then def.description else ""
+	--[[
+		На карточке — что игрок получит ЗДЕСЬ И СЕЙЧАС, а не описание
+		способности. Описание он прочитал, когда брал её впервые (для новой
+		карточки UpgradeText его и вернёт), а решение принимает по прибавке.
+
+		Текст считает клиент из общего конфига: та же функция, что применяет
+		улучшение на сервере, поэтому разойтись им не с чем.
+	]]
+	description.Text = if def then Abilities.UpgradeText(def, card.level, Cards.MultiplierFor(card.rarity)) else ""
 	description.TextColor3 = Palette.UI.subtext
 	description.TextWrapped = true
 	description.TextScaled = true

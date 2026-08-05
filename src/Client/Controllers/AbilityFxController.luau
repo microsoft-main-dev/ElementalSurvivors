@@ -70,6 +70,21 @@ type Nova = {
 }
 local novas: { Nova } = {}
 
+-- Мгновенные формы (Cone, Chain): деталь стоит на месте и гаснет.
+type Flash = {
+	part: Part,
+	startedAt: number,
+}
+local flashes: { Flash } = {}
+
+-- Сколько живёт след клина и звена цепи. Короче вспышки Nova: та расширяется
+-- и обязана быть видна в движении, а эти просто гаснут.
+local FLASH_TIME = 0.22
+
+-- Из скольких полос набирается клин. Пять — уже читается как сектор,
+-- а не как веер палок, и стоит пять деталей на срабатывание.
+local CONE_SLICES = 5
+
 local function makeEffectPart(shape: Enum.PartType): Part
 	local part = Instance.new("Part")
 	part.Shape = shape
@@ -141,6 +156,11 @@ local function clearAll(): ()
 	end
 	table.clear(novas)
 
+	for _, flash in flashes do
+		flash.part:Destroy()
+	end
+	table.clear(flashes)
+
 	table.clear(views)
 end
 
@@ -171,7 +191,7 @@ local function updateStateDriven(dt: number, playerWorld: Vector3): ()
 		if not def then
 			continue
 		end
-		local data = def.levels[view.level]
+		local data = Abilities.VisualStats(def, view.level)
 
 		if def.shape == "Orbit" then
 			-- Фаза из снимка докручивается локально: между снимками 0.1 с,
@@ -243,6 +263,30 @@ local function updateShards(dt: number): ()
 	end
 end
 
+--[[
+	Гаснущие вспышки: клин Cone и звенья Chain.
+
+	Обе формы бьют мгновенно, поэтому рисовать нечего, кроме следа: деталь
+	появляется на месте удара и гаснет за FLASH_TIME. Один список на обе формы —
+	разница между ними только в том, какие детали в него положили.
+]]
+local function updateFlashes(now: number): ()
+	local index = 1
+	while index <= #flashes do
+		local flash = flashes[index]
+		local progress = (now - flash.startedAt) / FLASH_TIME
+
+		if progress >= 1 then
+			flash.part:Destroy()
+			flashes[index] = flashes[#flashes]
+			flashes[#flashes] = nil :: any
+		else
+			flash.part.Transparency = 0.2 + 0.8 * progress
+			index += 1
+		end
+	end
+end
+
 local function updateNovas(now: number): ()
 	local index = 1
 	while index <= #novas do
@@ -271,6 +315,7 @@ local function onHeartbeat(deltaTime: number): ()
 	local now = os.clock()
 	updateShards(deltaTime)
 	updateNovas(now)
+	updateFlashes(now)
 
 	local playerWorld = getPlayerWorld()
 	if playerWorld then
@@ -293,7 +338,7 @@ local function spawnShards(key: string, payload: { { x: number, z: number, dx: n
 			end
 		end
 
-		local data = def.levels[if view then view.level else 1]
+		local data = Abilities.VisualStats(def, if view then view.level else 1)
 		local part = getShardPool().Get()
 		part.Size = Vector3.new(2.6, 0.5, 0.5)
 		part.Color = Palette.Element[def.element]
@@ -325,7 +370,7 @@ local function spawnNova(key: string, payload: { { x: number, z: number, dx: num
 		end
 	end
 
-	local data = def.levels[if view then view.level else 1]
+	local data = Abilities.VisualStats(def, if view then view.level else 1)
 	local part = makeEffectPart(Enum.PartType.Cylinder)
 	part.Color = Palette.Element[def.element]
 	part.CFrame = CFrame.new(origin.X + entry.x, 0.6, origin.Z + entry.z) * CFrame.Angles(0, 0, math.rad(90))
@@ -337,6 +382,89 @@ local function spawnNova(key: string, payload: { { x: number, z: number, dx: num
 		radius = data.radius :: number,
 		startedAt = os.clock(),
 	})
+end
+
+--[[
+	Клин Cone: набирается из нескольких полос, расходящихся веером от игрока.
+
+	Сектор в Roblox без картинки не нарисовать, а картинок у проекта нет
+	(правило 4). Полосы — тот же приём, которым собрано колесо фортуны.
+]]
+local function spawnCone(key: string, payload: { { x: number, z: number, dx: number, dz: number } }): ()
+	local def = Abilities.ByKey[key]
+	local entry = payload[1]
+	if not def or not entry then
+		return
+	end
+
+	local view: AbilityView? = nil
+	for _, candidate in views do
+		if candidate.key == key then
+			view = candidate
+			break
+		end
+	end
+
+	local data = Abilities.VisualStats(def, if view then view.level else 1)
+	local length = data.radius :: number
+	local angle = data.angle :: number
+	local color = Palette.Element[def.element]
+
+	local base = math.atan2(-entry.dz, entry.dx)
+	local now = os.clock()
+
+	for index = 1, CONE_SLICES do
+		-- Полосы раскладываются от одного края клина до другого; при одной
+		-- полосе делить было бы не на что, поэтому середина берётся отдельно.
+		local fraction = if CONE_SLICES > 1 then (index - 1) / (CONE_SLICES - 1) - 0.5 else 0
+		local offset = math.rad(angle) * fraction
+		local direction = base + offset
+
+		local part = makeEffectPart(Enum.PartType.Block)
+		part.Size = Vector3.new(length, 0.4, 1.6)
+		part.Color = color
+		part.Transparency = 0.2
+		part.CFrame = CFrame.new(origin + Vector3.new(entry.x, 1.2, entry.z))
+			* CFrame.Angles(0, direction, 0)
+			* CFrame.new(length / 2, 0, 0)
+		part.Parent = container
+
+		table.insert(flashes, { part = part, startedAt = now })
+	end
+end
+
+--[[
+	Звенья цепи: по отрезку на запись.
+
+	В полях направления лежит ПОЛНЫЙ вектор до следующего звена, а не единичный
+	(см. tickChain на сервере), поэтому длина отрезка берётся прямо из него.
+]]
+local function spawnChain(key: string, payload: { { x: number, z: number, dx: number, dz: number } }): ()
+	local def = Abilities.ByKey[key]
+	if not def then
+		return
+	end
+
+	local color = Palette.Element[def.element]
+	local now = os.clock()
+
+	for _, entry in payload do
+		local length = math.sqrt(entry.dx * entry.dx + entry.dz * entry.dz)
+		if length <= 0.1 then
+			continue
+		end
+
+		local part = makeEffectPart(Enum.PartType.Block)
+		part.Size = Vector3.new(length, 0.5, 0.5)
+		part.Color = color
+		part.Transparency = 0.1
+		part.CFrame = CFrame.new(origin + Vector3.new(entry.x, 2.2, entry.z))
+			* CFrame.Angles(0, math.atan2(-entry.dz, entry.dx), 0)
+			* CFrame.new(length / 2, 0, 0)
+		part.Parent = container
+
+		table.insert(flashes, { part = part, startedAt = now })
+	end
 end
 
 function AbilityFxController.Start(): ()
@@ -360,6 +488,11 @@ function AbilityFxController.Start(): ()
 			nova.part:Destroy()
 		end
 		table.clear(novas)
+
+		for _, flash in flashes do
+			flash.part:Destroy()
+		end
+		table.clear(flashes)
 	end)
 
 	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(function()
@@ -396,6 +529,10 @@ function AbilityFxController.Start(): ()
 			end
 			if kind == "Projectile" then
 				spawnShards(key, payload)
+			elseif kind == "Cone" then
+				spawnCone(key, payload)
+			elseif kind == "Chain" then
+				spawnChain(key, payload)
 			elseif kind == "Nova" then
 				spawnNova(key, payload)
 			end
