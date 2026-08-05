@@ -33,6 +33,13 @@ export type EggDef = {
 	-- Заполняется при загрузке: суммарный вес и границы для выбора.
 	totalWeight: number,
 	color: string, -- hex, чтобы Palette не тянуть в данные
+	--[[
+		Картинка яйца в панели. Ноль означает «ассета нет» — панель рисует
+		заглушку цветом яйца, а не пустое место. Так же устроен Config/Branding
+		и звуки: выдумывать Asset ID нельзя (правило 4), а ждать их, не написав
+		панель, незачем.
+	]]
+	imageAssetId: number,
 }
 
 local Eggs = {}
@@ -54,29 +61,43 @@ local definitions: { EggDef } = {
 			а не ровно впритык.
 		]]
 		price = 14000,
-		weights = { B = 60, A = 27, S = 10, SS = 2.7, SSS = 0.3 },
+		--[[
+			Решение владельца: сильного питомца не должно быть легко достать.
+			Базовое яйцо — это почти всегда B, изредка A и почти никогда S.
+			Ни SS, ни SSS из него не выпадает вовсе: за ними идут в дорогие.
+		]]
+		weights = { B = 87.5, A = 12, S = 0.5 },
 		totalWeight = 0,
 		color = "#8FD3AC",
+		imageAssetId = 0,
 	},
 	{
 		key = "Greater",
 		displayName = "Greater Egg",
-		description = "Fewer commons, better chance at S and above.",
+		description = "Far fewer commons and a real chance at S.",
 		currency = "essence",
 		price = 45000,
-		weights = { B = 35, A = 40, S = 19, SS = 5, SSS = 1 },
+		-- Второй тир: B перестаёт быть подавляющим, S становится реальным.
+		-- SS и выше по-прежнему нет — это всё ещё не топовое яйцо.
+		weights = { B = 55, A = 40, S = 5 },
 		totalWeight = 0,
 		color = "#5FC8E8",
+		imageAssetId = 0,
 	},
 	{
 		key = "Prime",
 		displayName = "Prime Egg",
-		description = "No commons at all. Expensive, and worth it.",
+		description = "The best egg you can buy with Essence. SS and SSS possible.",
 		currency = "essence",
 		price = 130000,
-		weights = { A = 45, S = 38, SS = 14, SSS = 3 },
+		--[[
+			Максимум, доступный за Essence. A уже заметно вероятнее B, и только
+			здесь вообще появляются SS и SSS — по решению владельца, 3% и 1%.
+		]]
+		weights = { B = 20, A = 50, S = 26, SS = 3, SSS = 1 },
 		totalWeight = 0,
 		color = "#E8CE4B",
+		imageAssetId = 0,
 	},
 	--[[
 		Донатные яйца. Купить их до M7 нельзя — Prisms в игре пока не
@@ -92,6 +113,7 @@ local definitions: { EggDef } = {
 		weights = { A = 30, S = 45, SS = 20, SSS = 5 },
 		totalWeight = 0,
 		color = "#7A5BC4",
+		imageAssetId = 0,
 	},
 	{
 		key = "Radiant",
@@ -102,6 +124,7 @@ local definitions: { EggDef } = {
 		weights = { S = 55, SS = 35, SSS = 10 },
 		totalWeight = 0,
 		color = "#F2EFDF",
+		imageAssetId = 0,
 	},
 }
 

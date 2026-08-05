@@ -25,13 +25,14 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Pets = require(Shared.Config.Pets)
 local Types = require(Shared.Types)
 
 type ProfileData = Types.ProfileData
 
 local ProfileSchema = {}
 
-ProfileSchema.Version = 1
+ProfileSchema.Version = 2
 
 --[[
 	Имя DataStore. Менять его — значит обнулить всем игрокам прогресс, поэтому
@@ -64,8 +65,15 @@ local template: ProfileData = {
 	talentPoints = 0,
 	talents = {},
 
-	-- Питомцы (M4). Коллекция уникальна по petId: дубликат уходит опытом
-	-- в уже имеющегося питомца, а не заводит вторую запись.
+	--[[
+		Питомцы (M4). С появлением эволюции (M2+) коллекция БОЛЬШЕ НЕ уникальна
+		по petId: дубликат — это отдельный экземпляр со своими звёздами, потому
+		что эволюция ест целых питомцев, а не счётчик.
+
+		Защита из раздела 6.1 ТЗ («сотня дубликатов не доит экспедиции»)
+		переехала в расчёт: оффлайн-доход считает только лучший экземпляр
+		каждого вида — см. PetService.CollectionPower.
+	]]
 	pets = {},
 	petUidCounter = 0,
 	equippedPet = "",
@@ -123,6 +131,23 @@ local template: ProfileData = {
 		receipts = {},
 	},
 
+	--[[
+		Настройки (M7). quality="Auto" не фиксирует устройство на старте —
+		клиент разворачивает его в High/Low сам, каждый вход заново, поэтому
+		отдельного флага "дефолт уже выбран" не нужно.
+
+		settings появилось у профилей, которые уже существуют. Настоящей
+		миграции не нужно — Reconcile дольёт дефолтом при следующей загрузке,
+		Version не поднят.
+	]]
+	settings = {
+		quality = "Auto",
+		othersEffects = "All",
+		sfxVolume = 1,
+		musicVolume = 1,
+		showDamageMeter = true,
+	},
+
 	stats = {
 		totalRuns = 0,
 		totalKills = 0,
@@ -137,9 +162,50 @@ ProfileSchema.Template = template
 	и обязана быть идемпотентной по смыслу: она выполняется ровно один раз,
 	но упасть посреди неё нельзя — профиль останется полусмигрированным.
 
-	В версии 1 миграций нет и быть не может: это первая схема.
+	Версия 2 разворачивает счётчик дубликатов в отдельных питомцев: эволюция
+	ест целых питомцев, а не число.
 ]]
-local Migrations: { (data: ProfileData) -> () } = {}
+local Migrations: { (data: ProfileData) -> () } = {
+	--[[
+		1 -> 2: дубликаты из счётчика превращаются в отдельных питомцев.
+
+		До этой версии дубликат хранился числом copies у единственной записи
+		вида. Эволюция ест целых питомцев, поэтому каждая копия разворачивается
+		в самостоятельный экземпляр со стартовыми звёздами своей редкости.
+
+		Заодно проставляются звёзды тем, у кого их ещё нет: поле появилось
+		вместе с лестницей, а Reconcile внутрь записей массива не заглядывает.
+	]]
+	[1] = function(data: ProfileData)
+		local extra: { Types.PetInstance } = {}
+
+		for _, pet in data.pets do
+			local record = pet :: any
+
+			if record.stars == nil then
+				record.stars = Pets.StartStars(pet.petId)
+			end
+
+			local copies = record.copies or 0
+			record.copies = nil
+
+			for _ = 1, copies do
+				data.petUidCounter += 1
+				table.insert(extra, {
+					uid = tostring(data.petUidCounter),
+					petId = pet.petId,
+					level = 1,
+					xp = 0,
+					stars = Pets.StartStars(pet.petId),
+				})
+			end
+		end
+
+		for _, pet in extra do
+			table.insert(data.pets, pet)
+		end
+	end,
+}
 
 --[[
 	Приводит профиль к текущей версии. Возвращает true, если данные изменились —

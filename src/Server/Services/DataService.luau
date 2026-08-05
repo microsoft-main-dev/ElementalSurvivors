@@ -25,8 +25,11 @@
 		DataService.RecordRun(player, kills, duration)          -> (boolean, boolean)
 		DataService.AddPet(player, petId)                       -> (string?, boolean, number)
 		DataService.AddPetXp(player, uid, amount)               -> boolean
+		DataService.EvolvePet(player, uid)                      -> boolean
 		DataService.SetEquippedPet(player, uid)                 -> boolean
 		DataService.SetFlag(player, name, value)                -> boolean
+		DataService.SetSetting(player, key, value)              -> boolean
+		DataService.ResetWheelCooldown(player)                  -> boolean
 		DataService.AddMetaXp(player, amount)                   -> number
 		DataService.SpendTalentPoint(player, nodeId, maxPoints) -> boolean
 		DataService.ResetTalents(player)                        -> number
@@ -141,6 +144,7 @@ function DataService.PushView(player: Player): ()
 		endlessBest = data.progress.endlessBest,
 		totalRuns = data.stats.totalRuns,
 		storyStage = data.progress.storyStage,
+		settings = data.settings,
 	}
 	remote:FireClient(player, view)
 end
@@ -292,13 +296,18 @@ function DataService.AddPet(player: Player, petId: string): (string?, boolean, n
 		return nil, false, 0
 	end
 
+	--[[
+		Дубликат — это ОТДЕЛЬНЫЙ питомец, а не опыт и не счётчик: эволюция ест
+		целых питомцев (решение владельца, по образцу Dragon Traveller).
+
+		Уникальность коллекции по petId на этом заканчивается. Защита из
+		раздела 6.1 ТЗ, чтобы запас корма не доил экспедиции, переехала
+		в расчёт дохода: он считает лучший экземпляр каждого вида.
+	]]
+	local owned = 0
 	for _, pet in data.pets do
 		if pet.petId == petId then
-			local xp = Pets.DuplicateXp(petId)
-			pet.xp += xp
-			pet.level = Pets.LevelForXp(pet.xp)
-			print(`[DataService] {player.Name} дубликат {petId}: +{xp} опыта питомцу`)
-			return pet.uid, true, xp
+			owned += 1
 		end
 	end
 
@@ -307,8 +316,17 @@ function DataService.AddPet(player: Player, petId: string): (string?, boolean, n
 	data.petUidCounter += 1
 	local uid = tostring(data.petUidCounter)
 
-	table.insert(data.pets, { uid = uid, petId = petId, level = 1, xp = 0 })
-	print(`[DataService] {player.Name} получил питомца {petId} (uid {uid})`)
+	table.insert(data.pets, {
+		uid = uid,
+		petId = petId,
+		level = 1,
+		xp = 0,
+		-- Стартовая позиция на звёздной лестнице зависит от редкости.
+		stars = Pets.StartStars(petId),
+	})
+	print(
+		`[DataService] {player.Name} получил питомца {petId} (uid {uid}), всего таких {owned + 1}`
+	)
 
 	-- Первый питомец экипируется сам: пустой слот при непустой коллекции —
 	-- это забытый игроком бонус, а не осмысленный выбор.
@@ -316,7 +334,7 @@ function DataService.AddPet(player: Player, petId: string): (string?, boolean, n
 		data.equippedPet = uid
 	end
 
-	return uid, false, 0
+	return uid, owned > 0, owned + 1
 end
 
 local function findPet(data: ProfileData, uid: string): Types.PetInstance?
@@ -353,6 +371,62 @@ function DataService.AddPetXp(player: Player, uid: string, amount: number): bool
 	return true
 end
 
+--[[
+	Эволюция питомца: съесть перечисленных и получить звезду.
+
+	Кого именно съесть, решает PetService — это правило игры. Здесь только
+	хранение: убрать указанные записи и поднять звезду. Экипированный питомец
+	не съедается ни при каких условиях, и проверка стоит здесь, потому что
+	факт экипировки принадлежит профилю.
+]]
+function DataService.EvolvePet(player: Player, uid: string, consume: { string }): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local pet = findPet(data, uid)
+	if not pet then
+		return false
+	end
+
+	local doomed: { [string]: boolean } = {}
+	for _, victim in consume do
+		if victim == uid or victim == data.equippedPet then
+			return false
+		end
+		doomed[victim] = true
+	end
+
+	--[[
+		Сначала убеждаемся, что на месте все: съесть половину и обнаружить,
+		что второй половины нет, — это потерянные питомцы без звезды.
+	]]
+	local found = 0
+	for _, candidate in data.pets do
+		if doomed[candidate.uid] then
+			found += 1
+		end
+	end
+	if found ~= #consume then
+		return false
+	end
+
+	local kept: { Types.PetInstance } = {}
+	for _, candidate in data.pets do
+		if not doomed[candidate.uid] then
+			table.insert(kept, candidate)
+		end
+	end
+	data.pets = kept
+
+	pet.stars = (pet.stars or Pets.StartStars(pet.petId)) + 1
+	print(
+		`[DataService] {player.Name} эволюционировал {pet.petId}: звёзд {pet.stars}, съедено {#consume}`
+	)
+	return true
+end
+
 function DataService.SetEquippedPet(player: Player, uid: string): boolean
 	local data = DataService.GetProfile(player)
 	if not data then
@@ -373,6 +447,71 @@ function DataService.SetFlag(player: Player, name: string, value: boolean): bool
 		return false
 	end
 	data.flags[name] = value
+	return true
+end
+
+-- Значение приемлемой громкости или nil. NaN/бесконечность отбрасываются целиком,
+-- а не приводятся к границе — приведение спрятало бы поломанный клиент.
+local function readVolume(value: unknown): number?
+	if typeof(value) ~= "number" then
+		return nil
+	end
+	local number = value :: number
+	if number ~= number or number == math.huge or number == -math.huge then
+		return nil
+	end
+	return math.clamp(number, 0, 1)
+end
+
+--[[
+	Единственная запись в settings (раздел 2.1 ТЗ, M7). Ключ и значение приходят
+	с клиента, поэтому оба проверяются здесь и только здесь — так же, как
+	AddCurrency проверяет сумму, а не доверяет ей.
+
+	Один универсальный сеттер, а не пять именованных функций: у всех пяти полей
+	одна и та же форма записи (одно значение профиля из закрытого набора),
+	и пять функций отличались бы только именем поля и способом валидации.
+]]
+function DataService.SetSetting(player: Player, key: string, value: unknown): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	local settings = data.settings
+
+	if key == "quality" then
+		if value ~= "Auto" and value ~= "High" and value ~= "Low" then
+			return false
+		end
+		settings.quality = value :: Types.QualityMode
+	elseif key == "othersEffects" then
+		if value ~= "All" and value ~= "Nearby" and value ~= "Off" then
+			return false
+		end
+		settings.othersEffects = value :: Types.OthersEffectsMode
+	elseif key == "sfxVolume" then
+		local volume = readVolume(value)
+		if not volume then
+			return false
+		end
+		settings.sfxVolume = volume
+	elseif key == "musicVolume" then
+		local volume = readVolume(value)
+		if not volume then
+			return false
+		end
+		settings.musicVolume = volume
+	elseif key == "showDamageMeter" then
+		if typeof(value) ~= "boolean" then
+			return false
+		end
+		settings.showDamageMeter = value :: boolean
+	else
+		return false
+	end
+
+	DataService.PushView(player)
 	return true
 end
 
@@ -648,6 +787,21 @@ function DataService.ClaimWheel(player: Player, essence: number): boolean
 end
 
 --[[
+	Отладочный сброс кулдауна колеса (Balance.Debug.resetWheelOnJoin, M7).
+	Отдельная операция, а не переиспользование ClaimWheel: тот ещё и начисляет
+	Essence, а сброс должен только освобождать колесо, не платя за это.
+]]
+function DataService.ResetWheelCooldown(player: Player): boolean
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false
+	end
+
+	data.daily.lastWheelSpin = 0
+	return true
+end
+
+--[[
 	Открыть следующий сюжетный уровень (раздел 5.1 ТЗ), M6.
 
 	Только вперёд и только на один шаг: storyStage — это «первый непройденный»,
@@ -672,6 +826,25 @@ function DataService.AdvanceStoryStage(player: Player, clearedIndex: number): bo
 	print(
 		`[DataService] {player.Name} прошёл уровень {clearedIndex}, открыт {data.progress.storyStage}`
 	)
+	return true
+end
+
+--[[
+	Открыть сюжет целиком (отладка, Studio-only — проверку делает StageService).
+
+	Отдельная операция, а не вызов AdvanceStoryStage с большим числом: та
+	описывает прохождение уровня и печатает об этом, а это — «считай, что всё
+	уже пройдено». Прогресс только растёт: рычаг не должен уметь отнимать
+	у профиля пройденное.
+]]
+function DataService.DebugUnlockStages(player: Player, stage: number): boolean
+	local data = DataService.GetProfile(player)
+	if not data or not isSaneAmount(stage) or stage <= data.progress.storyStage then
+		return false
+	end
+
+	data.progress.storyStage = stage
+	print(`[DataService] {player.Name}: сюжет открыт до уровня {stage} (отладка)`)
 	return true
 end
 

@@ -66,7 +66,7 @@ local function grantRolls(player: Player, eggKey: string, count: number): { EggR
 
 	for _ = 1, count do
 		local petId = Eggs.Roll(egg, random)
-		local uid, duplicate, xpGained = DataService.AddPet(player, petId)
+		local uid, duplicate, owned = DataService.AddPet(player, petId)
 
 		if uid then
 			local level = 1
@@ -83,7 +83,7 @@ local function grantRolls(player: Player, eggKey: string, count: number): { EggR
 			table.insert(results, {
 				petId = petId,
 				duplicate = duplicate,
-				xpGained = xpGained,
+				owned = owned,
 				level = level,
 			})
 		end

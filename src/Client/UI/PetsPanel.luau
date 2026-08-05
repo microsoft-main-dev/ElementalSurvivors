@@ -16,6 +16,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Balance = require(Shared.Config.Balance)
 local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
 local Types = require(Shared.Types)
@@ -28,6 +29,29 @@ export type Panel = {
 }
 
 local PetsPanel = {}
+
+--[[
+	Звёзды строкой: заполненные и пустые в пределах текущего этапа плюс подпись
+	самого этапа. Цвет символами не передать, поэтому этап называется словом —
+	«Purple 3/6» читается однозначно и не требует ни одного ассета.
+
+	Финальная позиция — отдельный случай: там одна бриллиантовая звезда,
+	а не седьмая красная.
+]]
+local STAGE_NAMES = { "White", "Purple", "Red" }
+
+local function starText(stars: number): string
+	if stars >= Pets.MaxStars then
+		return "◆ Diamond"
+	end
+
+	local stage, index = Pets.StarStage(stars)
+	local name = STAGE_NAMES[stage] or "?"
+	local filled = string.rep("★", index)
+	local empty = string.rep("☆", Balance.Pets.starsPerStage - index)
+
+	return `{filled}{empty} {name}`
+end
 
 function PetsPanel.Build(parent: Instance, send: (action: string, target: string?, extra: unknown) -> ()): Panel
 	local window = UiKit.Window(parent, "PetsPanel", "Pets")
@@ -67,10 +91,16 @@ function PetsPanel.Build(parent: Instance, send: (action: string, target: string
 
 			local row = UiKit.Row(list, order, Palette.Rarity[def.rarity])
 			row.badge.Text = def.rarity
-			row.title.Text = `{def.displayName}  ·  Lv {pet.level}`
+			row.title.Text = `{def.displayName}  ·  Lv {pet.level}  ·  {starText(pet.stars)}`
 
 			local progress = if pet.xpToNext > 0 then `{pet.xp}/{pet.xp + pet.xpToNext} xp` else "max level"
-			row.subtitle.Text = `{def.element}  ·  power {string.format("%.1f", pet.power)}  ·  {progress}`
+			--[[
+				Копии показываются только когда они есть: строка «0 copies»
+				у каждого питомца ничего не сообщает, а место занимает.
+				Дубликаты копятся на будущую эволюцию и опыта больше не дают.
+			]]
+			local starBonus = if pet.starMult > 1 then `  ·  stars x{string.format("%.1f", pet.starMult)}` else ""
+			row.subtitle.Text = `{def.element}  ·  power {string.format("%.1f", pet.power)}  ·  {progress}{starBonus}`
 
 			--[[
 				Экипированный питомец не предлагает кнопку «Equip»: нажать её
@@ -91,8 +121,45 @@ function PetsPanel.Build(parent: Instance, send: (action: string, target: string
 				end)
 			end
 
+			--[[
+				Эволюция: копии превращаются в звезду. Кнопка гаснет, когда копий
+				не хватает, и показывает, сколько их нужно, — иначе игрок
+				не понимает, зачем ему дубликаты.
+			]]
+			local evolve = UiKit.Button(row.actions, "Evolve", "Max", Palette.UI.accent)
+			evolve.LayoutOrder = 2
+			evolve.Size = UDim2.fromOffset(150, UiKit.ButtonHeight)
+			evolve.TextSize = 12
+
+			local recipe = pet.evolve
+			if recipe then
+				--[[
+					Что нужно на звезду, прямо на кнопке: «1×6★ + 2» означает
+					одну копию этого же питомца шестизвёздочной и двух любых.
+					Без этого игрок не понимает, зачем ему запас питомцев.
+				]]
+				local parts: { string } = {}
+				if recipe.copies > 0 then
+					table.insert(parts, `{recipe.haveCopies}/{recipe.copies}×{recipe.copyStars}★ same`)
+				end
+				if recipe.fodder > 0 then
+					table.insert(parts, `{recipe.haveFodder}/{recipe.fodder}×{recipe.fodderStars}★ any`)
+				end
+
+				evolve.Text = `★ {table.concat(parts, " + ")}`
+				UiKit.SetEnabled(
+					evolve,
+					recipe.haveCopies >= recipe.copies and recipe.haveFodder >= recipe.fodder + recipe.copies
+				)
+				evolve.Activated:Connect(function()
+					send("EvolvePet", pet.uid, nil)
+				end)
+			else
+				UiKit.SetEnabled(evolve, false)
+			end
+
 			local upgrade = UiKit.Button(row.actions, "Upgrade", "Max", Palette.UI.panel)
-			upgrade.LayoutOrder = 2
+			upgrade.LayoutOrder = 3
 			upgrade.Size = UDim2.fromOffset(92, UiKit.ButtonHeight)
 
 			if pet.upgradeCost > 0 then

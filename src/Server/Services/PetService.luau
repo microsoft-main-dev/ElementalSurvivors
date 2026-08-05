@@ -99,7 +99,13 @@ function PetService.GetLoadout(player: Player): RunLoadout
 		return emptyLoadout()
 	end
 
+	--[[
+		Две шкалы усиления: уровень (опыт) и звёзды (эволюция). Перемножаются,
+		а не складываются: звезда усиливает питомца целиком, включая то,
+		что он уже набрал уровнями.
+	]]
 	local scale = Pets.LevelScale(Pets.LevelForXp(pet.xp))
+		* Pets.StarMultiplier(pet.petId, pet.stars or Pets.StartStars(pet.petId))
 	local loadout = emptyLoadout()
 
 	loadout.petId = def.key
@@ -214,6 +220,120 @@ function PetService.GrantStarterIfNeeded(player: Player): boolean
 end
 
 --[[
+	Эволюция: съесть других питомцев и получить звезду.
+
+	Рецепт (Config/Pets) требует двух вещей: питомцев ТОГО ЖЕ вида и любых —
+	каждого со своей позицией на лестнице. Корм выбирается автоматически,
+	по правилу «сначала самых бесполезных»: меньше звёзд, потом меньше опыта.
+	Так игрок не скормит случайно то, во что уже вложился.
+
+	Экипированный питомец кормом не станет никогда — это проверяет и профиль.
+]]
+local function pickFodder(
+	data: Types.ProfileData,
+	targetUid: string,
+	petId: string?,
+	stars: number,
+	count: number
+): { string }?
+	if count <= 0 then
+		return {}
+	end
+
+	local candidates: { PetInstance } = {}
+	for _, pet in data.pets do
+		local matchesKind = petId == nil or pet.petId == petId
+		local atStars = (pet.stars or Pets.StartStars(pet.petId)) == stars
+
+		if matchesKind and atStars and pet.uid ~= targetUid and pet.uid ~= data.equippedPet then
+			table.insert(candidates, pet)
+		end
+	end
+
+	if #candidates < count then
+		return nil
+	end
+
+	-- Самые невложенные вперёд: их не жалко, и это то, чего ждёт игрок.
+	table.sort(candidates, function(a: PetInstance, b: PetInstance): boolean
+		if a.xp == b.xp then
+			return a.uid < b.uid
+		end
+		return a.xp < b.xp
+	end)
+
+	local chosen: { string } = {}
+	for index = 1, count do
+		table.insert(chosen, candidates[index].uid)
+	end
+	return chosen
+end
+
+function PetService.Evolve(player: Player, uid: string): (boolean, string?)
+	local data = DataService.GetProfile(player)
+	if not data then
+		return false, nil
+	end
+
+	local pet = findPet(player, uid)
+	if not pet then
+		return false, "You do not own that pet."
+	end
+
+	local stars = pet.stars or Pets.StartStars(pet.petId)
+	local recipe = Pets.Recipe(stars)
+	if not recipe then
+		return false, "That pet is already at its final star."
+	end
+
+	--[[
+		Корм собирается двумя порциями, и вторая ищется уже без первой:
+		иначе один и тот же питомец мог бы засчитаться и как копия, и как
+		«любой», а съеден был бы один раз.
+	]]
+	local consume = pickFodder(data, uid, pet.petId, recipe.copyStars, recipe.copies)
+	if not consume then
+		return false, `Needs {recipe.copies} more copies at {recipe.copyStars}★.`
+	end
+
+	local taken: { [string]: boolean } = {}
+	for _, victim in consume do
+		taken[victim] = true
+	end
+
+	local fodder: { string } = {}
+	if recipe.fodder > 0 then
+		local pool = pickFodder(data, uid, nil, recipe.fodderStars, recipe.fodder + #consume)
+		if not pool then
+			return false, `Needs {recipe.fodder} pets at {recipe.fodderStars}★.`
+		end
+
+		for _, candidate in pool do
+			if not taken[candidate] and #fodder < recipe.fodder then
+				table.insert(fodder, candidate)
+			end
+		end
+
+		if #fodder < recipe.fodder then
+			return false, `Needs {recipe.fodder} pets at {recipe.fodderStars}★.`
+		end
+	end
+
+	for _, victim in fodder do
+		table.insert(consume, victim)
+	end
+
+	if not DataService.EvolvePet(player, uid, consume) then
+		return false, "Could not evolve that pet."
+	end
+
+	PetService.PushView(player)
+
+	local def = Pets.ByKey[pet.petId]
+	return true, if def then `{def.displayName} evolved!` else "Evolved!"
+end
+
+--[[
 	Сила питомца всегда выводится из опыта, а не из поля level.
 
 	Поле level в профиле — это зеркало, которое поддерживает DataService,
@@ -257,16 +377,79 @@ function PetService.SortedByPower(player: Player): { PetInstance }
 	return sorted
 end
 
--- Суммарная сила коллекции с затуханием (раздел 6.1 ТЗ).
+--[[
+	Суммарная сила коллекции с затуханием (раздел 6.1 ТЗ).
+
+	Считается по ЛУЧШЕМУ экземпляру каждого вида. С появлением эволюции
+	коллекция перестала быть уникальной по питомцу, и без этого правила запас
+	корма — сотня одинаковых заготовок — поднимал бы оффлайн-доход просто
+	за факт хранения. Раздел 6.1 ТЗ этого прямо не допускает, и защита,
+	которая раньше держалась на уникальности записей, теперь живёт здесь.
+]]
 function PetService.CollectionPower(player: Player): number
+	local best: { [string]: number } = {}
+
+	for _, pet in PetService.SortedByPower(player) do
+		local power = powerOf(pet)
+		if power > (best[pet.petId] or 0) then
+			best[pet.petId] = power
+		end
+	end
+
+	local powers: { number } = {}
+	for _, power in best do
+		table.insert(powers, power)
+	end
+	table.sort(powers, function(a: number, b: number): boolean
+		return a > b
+	end)
+
 	local decay = Balance.Offline.decay
 	local total = 0
-
-	for index, pet in PetService.SortedByPower(player) do
-		total += powerOf(pet) * decay ^ (index - 1)
+	for index, power in powers do
+		total += power * decay ^ (index - 1)
 	end
 
 	return total
+end
+
+--[[
+	Что нужно питомцу на следующую звезду и сколько из этого уже есть.
+
+	Считается на сервере: клиент не должен уметь предсказывать, годится ли
+	конкретный питомец кормом, — иначе он покажет одно, а сервер сделает другое.
+]]
+local function evolveView(data: Types.ProfileData, pet: PetInstance, stars: number): Types.EvolveView?
+	local recipe = Pets.Recipe(stars)
+	if not recipe then
+		return nil
+	end
+
+	local haveCopies = 0
+	local haveFodder = 0
+
+	for _, candidate in data.pets do
+		if candidate.uid == pet.uid or candidate.uid == data.equippedPet then
+			continue
+		end
+
+		local at = candidate.stars or Pets.StartStars(candidate.petId)
+		if at == recipe.copyStars and candidate.petId == pet.petId then
+			haveCopies += 1
+		end
+		if at == recipe.fodderStars then
+			haveFodder += 1
+		end
+	end
+
+	return {
+		copies = recipe.copies,
+		copyStars = recipe.copyStars,
+		fodder = recipe.fodder,
+		fodderStars = recipe.fodderStars,
+		haveCopies = haveCopies,
+		haveFodder = haveFodder,
+	}
 end
 
 function PetService.BuildView(player: Player): Types.PetsView?
@@ -286,6 +469,8 @@ function PetService.BuildView(player: Player): Types.PetsView?
 	local views: { Types.PetView } = {}
 	for _, pet in PetService.SortedByPower(player) do
 		local level, xpIntoLevel, xpToNext = Pets.LevelForXp(pet.xp)
+		-- or: у питомцев, полученных до появления звёзд, поля нет.
+		local stars = pet.stars or Pets.StartStars(pet.petId)
 		table.insert(views, {
 			uid = pet.uid,
 			petId = pet.petId,
@@ -295,6 +480,9 @@ function PetService.BuildView(player: Player): Types.PetsView?
 			power = Pets.Power(pet.petId, level),
 			upgradeCost = Pets.UpgradeCost(pet.petId, level),
 			equipped = pet.uid == data.equippedPet,
+			stars = stars,
+			starMult = Pets.StarMultiplier(pet.petId, stars),
+			evolve = evolveView(data, pet, stars),
 		})
 	end
 
@@ -311,7 +499,39 @@ function PetService.BuildView(player: Player): Types.PetsView?
 	}
 end
 
+--[[
+	Публичный питомец: ключ экипированного в атрибуте игрока.
+
+	Питомцами хвастаются — значит их должны видеть все, а не только владелец
+	(срез PetsView уходит одному игроку и для этого не годится). Атрибут
+	реплицируется всем сам, в том числе тем, кто зайдёт позже, поэтому ни
+	рассылки при входе, ни учёта «кому уже отправили» не нужно.
+
+	Наружу уходит только ключ вида питомца — ни uid, ни опыт, ни коллекция.
+	Клиент по этому ключу рисует модель, и подделать им нечего: у чужого
+	клиента нет ни одного способа записать сюда что-либо.
+]]
+local function pushPublicPet(player: Player): ()
+	local data = DataService.GetProfile(player)
+	local petId = ""
+
+	if data then
+		for _, pet in data.pets do
+			if pet.uid == data.equippedPet then
+				petId = pet.petId
+				break
+			end
+		end
+	end
+
+	player:SetAttribute(Net.Attribute.EquippedPet, petId)
+end
+
 function PetService.PushView(player: Player): ()
+	-- Атрибут обновляется здесь же: коллекция меняется только через этот путь,
+	-- и второй точки для одного факта заводить незачем.
+	pushPublicPet(player)
+
 	local remote = viewRemote
 	if not remote then
 		return

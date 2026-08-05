@@ -46,7 +46,7 @@ local definitions: { PetDef } = {
 		starterAbility = "FireOrbit",
 		passives = { maxHealth = 10, walkSpeed = 0, magnetRadius = 1 },
 		elementDamage = 1.08,
-		model = { size = Vector3.new(2, 2, 2), shape = "Ball", neon = false },
+		model = { size = Vector3.new(2, 2, 2), shape = "Ball", neon = false, flies = false },
 	},
 	{
 		key = "FrostPup",
@@ -58,7 +58,7 @@ local definitions: { PetDef } = {
 		starterAbility = "IceShard",
 		passives = { maxHealth = 5, walkSpeed = 1, magnetRadius = 1 },
 		elementDamage = 1.08,
-		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = false },
+		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = false, flies = false },
 	},
 	{
 		key = "MossSprout",
@@ -70,7 +70,7 @@ local definitions: { PetDef } = {
 		starterAbility = "ThornAura",
 		passives = { maxHealth = 8, walkSpeed = 0, magnetRadius = 3 },
 		elementDamage = 1.08,
-		model = { size = Vector3.new(1.8, 2.4, 1.8), shape = "Cylinder", neon = false },
+		model = { size = Vector3.new(1.8, 2.4, 1.8), shape = "Cylinder", neon = false, flies = false },
 	},
 
 	--[[ A — заметный уклон в одну характеристику. ]]
@@ -81,10 +81,10 @@ local definitions: { PetDef } = {
 		description = "Starts you with Storm Nova. Built for speed.",
 		rarity = "A",
 		element = "Lightning",
-		starterAbility = "StormNova",
+		starterAbility = "ChainSpark",
 		passives = { maxHealth = 5, walkSpeed = 2.5, magnetRadius = 2 },
 		elementDamage = 1.16,
-		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = true },
+		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = true, flies = false },
 	},
 	{
 		key = "DuskMoth",
@@ -93,10 +93,10 @@ local definitions: { PetDef } = {
 		description = "Starts you with Shadow Needles. Wide crystal pickup.",
 		rarity = "A",
 		element = "Dark",
-		starterAbility = "ShadowNeedle",
+		starterAbility = "WingGust",
 		passives = { maxHealth = 5, walkSpeed = 1, magnetRadius = 5 },
 		elementDamage = 1.16,
-		model = { size = Vector3.new(2.4, 1.6, 2.4), shape = "Block", neon = true },
+		model = { size = Vector3.new(2.4, 1.6, 2.4), shape = "Block", neon = true, flies = true },
 	},
 	{
 		key = "GlowFinch",
@@ -105,10 +105,10 @@ local definitions: { PetDef } = {
 		description = "Starts you with Light Burst. Tougher than it looks.",
 		rarity = "A",
 		element = "Light",
-		starterAbility = "LightBurst",
+		starterAbility = "MoteHalo",
 		passives = { maxHealth = 20, walkSpeed = 1, magnetRadius = 1 },
 		elementDamage = 1.16,
-		model = { size = Vector3.new(1.8, 1.8, 1.8), shape = "Ball", neon = true },
+		model = { size = Vector3.new(1.8, 1.8, 1.8), shape = "Ball", neon = true, flies = true },
 	},
 
 	--[[ S — сильные бонусы к своей стихии, билд начинает ощущаться. ]]
@@ -119,10 +119,10 @@ local definitions: { PetDef } = {
 		description = "Fire Halo starter. Fire abilities hit noticeably harder.",
 		rarity = "S",
 		element = "Fire",
-		starterAbility = "FireOrbit",
+		starterAbility = "EmberTrail",
 		passives = { maxHealth = 25, walkSpeed = 1, magnetRadius = 2 },
 		elementDamage = 1.3,
-		model = { size = Vector3.new(2.6, 2.2, 2.6), shape = "Block", neon = true },
+		model = { size = Vector3.new(2.6, 2.2, 2.6), shape = "Block", neon = true, flies = false },
 	},
 	{
 		key = "GlacierOwl",
@@ -131,10 +131,10 @@ local definitions: { PetDef } = {
 		description = "Ice Shard starter. Ice abilities hit noticeably harder.",
 		rarity = "S",
 		element = "Ice",
-		starterAbility = "IceShard",
+		starterAbility = "FrostBurst",
 		passives = { maxHealth = 15, walkSpeed = 2, magnetRadius = 4 },
 		elementDamage = 1.3,
-		model = { size = Vector3.new(2.2, 2.6, 2.2), shape = "Ball", neon = true },
+		model = { size = Vector3.new(2.2, 2.6, 2.2), shape = "Ball", neon = true, flies = true },
 	},
 
 	--[[ SS — узкая специализация, ради которой билд и собирают. ]]
@@ -145,10 +145,10 @@ local definitions: { PetDef } = {
 		description = "Storm Nova starter. Lightning damage soars.",
 		rarity = "SS",
 		element = "Lightning",
-		starterAbility = "StormNova",
+		starterAbility = "StormArc",
 		passives = { maxHealth = 30, walkSpeed = 2, magnetRadius = 3 },
 		elementDamage = 1.45,
-		model = { size = Vector3.new(3, 2.4, 3), shape = "Block", neon = true },
+		model = { size = Vector3.new(3, 2.4, 3), shape = "Block", neon = true, flies = true },
 	},
 	{
 		key = "VoidLynx",
@@ -157,10 +157,10 @@ local definitions: { PetDef } = {
 		description = "Shadow Needles starter. Dark damage soars.",
 		rarity = "SS",
 		element = "Dark",
-		starterAbility = "ShadowNeedle",
+		starterAbility = "VoidFangs",
 		passives = { maxHealth = 20, walkSpeed = 3, magnetRadius = 5 },
 		elementDamage = 1.45,
-		model = { size = Vector3.new(2.8, 2.2, 2.8), shape = "Ball", neon = true },
+		model = { size = Vector3.new(2.8, 2.2, 2.8), shape = "Ball", neon = true, flies = false },
 	},
 
 	--[[ SSS — вершина коллекции: и бонусы, и вклад в экспедиции. ]]
@@ -171,10 +171,10 @@ local definitions: { PetDef } = {
 		description = "Light Burst starter. Light damage is overwhelming.",
 		rarity = "SSS",
 		element = "Light",
-		starterAbility = "LightBurst",
+		starterAbility = "SolarFlare",
 		passives = { maxHealth = 40, walkSpeed = 3, magnetRadius = 6 },
 		elementDamage = 1.65,
-		model = { size = Vector3.new(3.2, 3.2, 3.2), shape = "Ball", neon = true },
+		model = { size = Vector3.new(3.2, 3.2, 3.2), shape = "Ball", neon = true, flies = true },
 	},
 	{
 		key = "VerdantWarden",
@@ -183,10 +183,10 @@ local definitions: { PetDef } = {
 		description = "Thorn Aura starter. Nature damage is overwhelming.",
 		rarity = "SSS",
 		element = "Nature",
-		starterAbility = "ThornAura",
+		starterAbility = "SeedVolley",
 		passives = { maxHealth = 55, walkSpeed = 1, magnetRadius = 5 },
 		elementDamage = 1.65,
-		model = { size = Vector3.new(2.8, 3.4, 2.8), shape = "Cylinder", neon = true },
+		model = { size = Vector3.new(2.8, 3.4, 2.8), shape = "Cylinder", neon = true, flies = false },
 	},
 }
 
@@ -241,6 +241,132 @@ function Pets.Power(petId: string, level: number): number
 	return base * (1 + (level - 1) * Balance.Pets.powerPerLevel)
 end
 
+--[[
+	=== ЗВЁЗДНАЯ ЛЕСТНИЦА ===
+
+	Позиция 1..Pets.MaxStars, где последняя — бриллиантовая. Этап и номер
+	звезды внутри этапа выводятся из позиции: хранить их отдельно значило бы
+	держать два поля, которые обязаны совпадать.
+]]
+Pets.MaxStars = Balance.Pets.starStages * Balance.Pets.starsPerStage + 1
+
+-- С какой позиции начинает питомец этой редкости.
+function Pets.StartStars(petId: string): number
+	local def = Pets.ByKey[petId]
+	if not def then
+		return 1
+	end
+	return Balance.Pets.rarityStartStars[def.rarity]
+end
+
+--[[
+	Этап (1..starStages) и номер звезды внутри него.
+
+	Финальная позиция — отдельный случай: это одна бриллиантовая звезда,
+	а не седьмая красная, поэтому этап у неё на единицу больше.
+]]
+function Pets.StarStage(stars: number): (number, number)
+	local perStage = Balance.Pets.starsPerStage
+	if stars >= Pets.MaxStars then
+		return Balance.Pets.starStages + 1, 1
+	end
+
+	local index = math.max(stars, 1) - 1
+	return index // perStage + 1, index % perStage + 1
+end
+
+--[[
+	=== РЕЦЕПТЫ ЭВОЛЮЦИИ ===
+
+	Ключ — позиция, С КОТОРОЙ идёт эволюция. Питомец любой редкости берёт
+	рецепт по своей текущей позиции, поэтому таблица одна на всех: A стартует
+	с четвёртой и просто не проходит первую ступень.
+
+	copies — питомцы ТОГО ЖЕ вида, fodder — любые. Ранние ступени едят
+	питомцев своего уровня, а начиная с шестой звезды корм всегда
+	шестизвёздочный: пирамида на этом останавливается и не разрастается
+	бесконечно.
+
+	Порядок и числа — целиком решение владельца, по образцу Dragon Traveller.
+
+	ЦЕНА ЭВОЛЮЦИИ РЕДКИХ ПИТОМЦЕВ ЗАДРАНА НАМЕРЕННО. Ступени, где нужен
+	питомец того же вида, упираются в шанс его выпадения: до бриллиантовой
+	звезды B-питомцу нужно 24 экземпляра своего вида (~82 базовых яйца,
+	порядка миллиона Essence), а SSS — 12 экземпляров, но при шансе 0.5%
+	за ролл это около 2400 яиц Prime, то есть сотни миллионов Essence.
+
+	Разница в тридцать раз посчитана и принята владельцем: полная прокачка
+	максимального питомца — это цель поздней игры, а сейчас реализована
+	только ранняя. Не «чинить» это, приняв за просчёт.
+
+	ОДНО МЕСТО ЗАПИСАНО НЕ БУКВАЛЬНО: на ступени «5 красных -> 6 красных»
+	владелец назвал корм пятизвёздочным. Это сделало бы ступень дешевле
+	предыдущей (пять питомцев по шесть базовых против четырёх по двенадцать),
+	то есть провал в середине красного этапа. Записано 6★ — если провал
+	задуман, поменять надо здесь.
+]]
+local RECIPES: { [number]: Types.EvolveRecipe } = {
+	-- Белый этап: корм своего уровня.
+	[3] = { copies = 1, copyStars = 3, fodder = 0, fodderStars = 0 },
+	[4] = { copies = 0, copyStars = 0, fodder = 2, fodderStars = 4 },
+	[5] = { copies = 1, copyStars = 5, fodder = 0, fodderStars = 0 },
+
+	-- Дальше корм всегда шестизвёздочный.
+	[6] = { copies = 0, copyStars = 0, fodder = 2, fodderStars = 6 },
+	[7] = { copies = 0, copyStars = 0, fodder = 3, fodderStars = 6 },
+	[8] = { copies = 1, copyStars = 6, fodder = 2, fodderStars = 6 },
+	[9] = { copies = 0, copyStars = 0, fodder = 3, fodderStars = 6 },
+	[10] = { copies = 0, copyStars = 0, fodder = 4, fodderStars = 6 },
+	[11] = { copies = 1, copyStars = 6, fodder = 3, fodderStars = 6 },
+	[12] = { copies = 0, copyStars = 0, fodder = 3, fodderStars = 6 },
+	[13] = { copies = 0, copyStars = 0, fodder = 4, fodderStars = 6 },
+	[14] = { copies = 1, copyStars = 6, fodder = 4, fodderStars = 6 },
+	[15] = { copies = 0, copyStars = 0, fodder = 3, fodderStars = 6 },
+	[16] = { copies = 0, copyStars = 0, fodder = 4, fodderStars = 6 },
+	[17] = { copies = 0, copyStars = 0, fodder = 5, fodderStars = 6 },
+	[18] = { copies = 2, copyStars = 6, fodder = 5, fodderStars = 6 },
+}
+
+for _, recipe in RECIPES do
+	table.freeze(recipe)
+end
+
+-- Рецепт следующей ступени или nil, если питомец на финале.
+function Pets.Recipe(stars: number): Types.EvolveRecipe?
+	return RECIPES[stars]
+end
+
+--[[
+	Во сколько раз звёзды усиливают бонусы питомца.
+
+	Линейная интерполяция между якорями из Balance: на границах этапов
+	множитель ровно такой, как задумано (x2, x4, x8), внутри этапа растёт
+	равномерно. Отсчёт идёт от стартовой позиции своей редкости — на ней
+	множитель всегда единица.
+]]
+function Pets.StarMultiplier(petId: string, stars: number): number
+	local start = Pets.StartStars(petId)
+	local current = math.clamp(stars, start, Pets.MaxStars)
+
+	local fromStars = start
+	local fromMult = 1
+
+	for _, anchor in Balance.Pets.starAnchors do
+		if current <= anchor.stars then
+			local span = anchor.stars - fromStars
+			if span <= 0 then
+				return anchor.mult
+			end
+			local progress = (current - fromStars) / span
+			return fromMult + (anchor.mult - fromMult) * progress
+		end
+		fromStars = anchor.stars
+		fromMult = anchor.mult
+	end
+
+	return fromMult
+end
+
 -- Сколько Essence стоит поднять питомца с уровня level на level + 1.
 -- Ноль означает, что поднимать некуда.
 function Pets.UpgradeCost(petId: string, level: number): number
@@ -250,15 +376,6 @@ function Pets.UpgradeCost(petId: string, level: number): number
 	end
 	local base = Balance.Pets.rarityUpgradeCost[def.rarity]
 	return math.floor(base * Balance.Pets.upgradeCostGrowth ^ (level - 1) + 0.5)
-end
-
--- Сколько опыта даёт дубликат. Зависит от редкости выпавшего питомца.
-function Pets.DuplicateXp(petId: string): number
-	local def = Pets.ByKey[petId]
-	if not def then
-		return 0
-	end
-	return Balance.Pets.rarityDuplicateXp[def.rarity]
 end
 
 --[[
