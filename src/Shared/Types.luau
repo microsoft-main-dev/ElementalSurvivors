@@ -58,6 +58,42 @@ export type EnemyModel = {
 	neon: boolean,
 }
 
+--[[
+	Во что враг разваливается при смерти (архетип Splitter).
+
+	nil означает «ни во что». Считается только смерть от урона: зачистка
+	по потолку живых и уборка в конце фазы деления не вызывают, иначе
+	освобождение места плодило бы врагов.
+]]
+export type EnemySplit = {
+	key: string,
+	count: number,
+}
+
+--[[
+	Дальнобойная атака (архетип Ranged).
+
+	range — дистанция, которую враг держит; motionMargin — ширина полосы,
+	внутри которой он стоит и стреляет, а не дёргается вперёд-назад.
+
+	telegraph — трассер перед выстрелом. Он обязателен: снаряд, вылетевший
+	без предупреждения из толпы в триста врагов, читается как несправедливость
+	ровно так же, как атака босса без телеграфа.
+
+	Снаряды НЕ самонаводящиеся: летят по прямой в ту точку, где игрок был
+	в момент выстрела, и от них можно уйти — в этом весь смысл стрелка.
+]]
+export type EnemyRanged = {
+	range: number,
+	motionMargin: number,
+	cooldown: number,
+	telegraph: number,
+	damage: number,
+	speed: number,
+	lifetime: number,
+	hitRadius: number,
+}
+
 export type EnemyDef = {
 	key: string,
 	typeId: number, -- индекс в Enemies.List; именно он летит по сети
@@ -67,13 +103,25 @@ export type EnemyDef = {
 	modifiers: { EnemyModifier },
 	stats: EnemyStats,
 	model: EnemyModel,
+	splitInto: EnemySplit?,
+	ranged: EnemyRanged?,
 }
 
--- Строка расписания волн (раздел 3.5 ТЗ).
+--[[
+	Строка расписания волн (раздел 3.5 ТЗ).
+
+	Плотность боя по времени: сколько врагов в секунду и сколько их может быть
+	живыми одновременно. Состав врагов сюжетного уровня задаёт сам уровень
+	(LocationDef.enemies) — здесь он только для бесконечного режима.
+
+	types действует только там, где локации нет (бесконечный режим): в сюжете
+	и обучении состав врагов задаёт сам уровень (StageDef.enemies), и он знает
+	про это больше — в том числе с какой секунды какой враг входит в бой.
+]]
 export type WaveEntry = {
 	time: number, -- с какой секунды забега действует
 	spawnRate: number, -- врагов в секунду
-	types: { string }, -- ключи из Config/Enemies
+	types: { string }, -- ключи из Config/Enemies; для забега без локации
 	maxAlive: number, -- жёсткий потолок живых врагов
 }
 
@@ -92,14 +140,55 @@ export type AbilityShape = "Orbit" | "Projectile" | "Aura" | "Nova" | "Cone" | "
 export type AbilityLevel = {
 	damage: number,
 	cooldown: number,
-	count: number?, -- орбов / снарядов за срабатывание
-	radius: number?, -- радиус орбиты, ауры или вспышки
+	count: number?, -- орбов / снарядов за срабатывание, звеньев у цепи
+	radius: number?, -- радиус орбиты, ауры, вспышки; длина клина; дальность прыжка цепи
 	hitRadius: number?, -- радиус поражения орба или снаряда
 	angularSpeed: number?, -- скорость вращения орбиты, рад/с
 	speed: number?, -- скорость снаряда
 	lifetime: number?, -- время жизни снаряда
 	pierce: number?, -- сколько врагов пробивает снаряд
+	angle: number?, -- ширина клина Cone, градусов
+	falloff: number?, -- доля урона, доходящая до следующего звена Chain
 }
+
+--[[
+	Что даёт способности каждый третий уровень (рубеж).
+
+	Count  — снаряды или орбы: +amount штук за срабатывание;
+	Radius — радиус орбиты, ауры или вспышки: +amount стадов;
+	Pierce — сколько врагов пробивает снаряд: +amount.
+
+	Рубеж всегда одинаков и не зависит от редкости карточки: редкость крутит
+	только обычные уровни. Иначе «+1 снаряд» превращался бы в лотерею, а это
+	как раз то, ради чего игрок качает способность.
+]]
+export type AbilityMilestoneKind = "Count" | "Radius" | "Pierce"
+
+export type AbilityMilestone = {
+	kind: AbilityMilestoneKind,
+	amount: number,
+}
+
+--[[
+	Рост за ОБЫЧНЫЙ уровень: множители к базе. Урон растёт, кулдаун сокращается.
+	Оба множителя применяются к накопленному значению, а не к базовому:
+	редкая карточка даёт больше, и её вклад должен остаться в способности
+	навсегда, а не потеряться на следующем уровне.
+]]
+export type AbilityGrowth = {
+	damage: number, -- > 1
+	cooldown: number, -- < 1
+}
+
+--[[
+	Откуда способность берётся.
+
+	Base      — базовые: их предлагают карточки в бою;
+	Signature — уникальная способность питомца: её нельзя получить карточкой,
+	            только принести с собой. Качается картами наравне с базовыми —
+	            иначе редкий питомец обесценивался бы к середине забега.
+]]
+export type AbilitySource = "Base" | "Signature"
 
 export type AbilityDef = {
 	key: string,
@@ -108,7 +197,23 @@ export type AbilityDef = {
 	description: string,
 	element: Element,
 	shape: AbilityShape,
-	levels: { AbilityLevel },
+	source: AbilitySource,
+	base: AbilityLevel,
+	growth: AbilityGrowth,
+	milestone: AbilityMilestone,
+}
+
+--[[
+	Накопленное способностью за забег. Из номера уровня это больше не выводится:
+	один и тот же девятый уровень у двух игроков разный, потому что карточки
+	падали с разной редкостью.
+]]
+export type AbilityBonuses = {
+	damageMult: number,
+	cooldownMult: number,
+	count: number, -- добавка к числу снарядов или орбов
+	radius: number, -- добавка к радиусу, стадов
+	pierce: number,
 }
 
 -- Состояние способности в забеге, уходит на клиент для HUD и отрисовки.
@@ -121,11 +226,19 @@ export type AbilityView = {
 	damage: number, -- суммарный урон способности за забег
 }
 
--- Карточка выбора при левел-апе.
+--[[
+	Карточка выбора при левел-апе.
+
+	rarity — ключ редкости из Config/Cards: она множит прибавку обычного уровня
+	и рисуется цветом. Решает её сервер и запоминает вместе с предложением;
+	текст улучшения клиент считает сам из общего конфига по ключу, уровню
+	и редкости — расходиться им не с чем, функция одна и та же.
+]]
 export type LevelUpCard = {
 	abilityKey: string,
 	isNew: boolean,
 	level: number, -- каким станет уровень, если взять
+	rarity: string,
 }
 
 -- Пакет для HUD, шлётся 10 раз в секунду.
@@ -148,7 +261,14 @@ export type RunEndReason = "Death" | "Left" | "Victory"
 	открывает следующий уровень. Endless — бесконечный режим, награда и опыт
 	считаются по убийствам и времени.
 ]]
-export type RunMode = "Story" | "Endless"
+--[[
+	Tutorial — обязательный первый забег новичка (M7, раздел 4 ТЗ). Отдельный
+	режим, а не сюжетный уровень с номером ноль: номер сюжетного уровня обязан
+	значить одно и то же везде, где встречается, иначе экран результатов,
+	открытие следующего уровня и проверка права играть обзаводятся каждый
+	своим исключением.
+]]
+export type RunMode = "Story" | "Endless" | "Tutorial"
 
 --[[
 	Фаза сюжетного забега.
@@ -168,13 +288,36 @@ export type StagePhase = "Survival" | "Sweep" | "Boss" | "Done"
 	Локация (раздел 5.1 ТЗ). Двадцать локаций — это данные; конкретный уровень
 	внутри локации собирается формулой, а не выписывается руками.
 ]]
+--[[
+	Когда враг входит в бой.
+
+	fromStage — с какого уровня ВНУТРИ локации он вообще появляется;
+	fromFraction — с какой доли фазы выживания на этом уровне (0 — сразу,
+	0.5 — со второй половины).
+
+	Два измерения, а не одно, потому что уровень усложняется и от номера,
+	и по ходу самого боя: «большой слизень со второго уровня» и «мечник
+	со второй половины шестого» — это одно правило, записанное одинаково.
+]]
+export type LocationEnemy = {
+	key: string, -- ключ из Config/Enemies
+	fromStage: number,
+	fromFraction: number,
+}
+
 export type LocationDef = {
 	key: string,
 	displayName: string,
 	levels: number, -- сколько уровней в этой локации
-	palette: string, -- ключ палитры арены
-	enemyTypes: { string }, -- ключи из Config/Enemies
-	bossKeys: { string }, -- боссовые архетипы, чередуются каждые 5 уровней
+	palette: string, -- ключ палитры арены в Palette.Arenas
+	enemies: { LocationEnemy },
+	bossKeys: { string }, -- боссовые архетипы, чередуются внутри локации
+}
+
+-- Враг уровня с уже посчитанной секундой появления. Собирается Stages.Get.
+export type StageEnemy = {
+	key: string,
+	fromSeconds: number,
 }
 
 --[[
@@ -190,7 +333,12 @@ export type StageDef = {
 	enemyHealthMult: number,
 	enemyDamageMult: number,
 	enemySpeedMult: number,
-	enemyTypes: { string },
+	--[[
+		Кто спавнится на этом уровне и с какой секунды. Отсортировано
+		по времени: EnemyService идёт по нему курсором, а не пересобирает
+		набор каждый спавн.
+	]]
+	enemies: { StageEnemy },
 	bossKey: string,
 	bossHealth: number,
 	essence: number, -- награда за победу
@@ -213,7 +361,14 @@ export type BossAttackKind =
 	"Charge" -- рывок по прямой через арену
 	| "Shockwave" -- расходящееся кольцо от босса
 	| "Summon" -- призыв обычных врагов
+	| "HealField" -- лечащее поле над скоплением своих призванных
+	| "PoisonField" -- ядовитая лужа в случайной точке арены
 
+--[[
+	Поля — первые СТОЙКИЕ эффекты в игре: остальные атаки бьют мгновенно.
+	Живут duration секунд и тикают раз в tickInterval, поэтому у них свои поля
+	в определении атаки.
+]]
 export type BossAttack = {
 	kind: BossAttackKind,
 	telegraph: number, -- секунд между показом области и уроном
@@ -222,7 +377,22 @@ export type BossAttack = {
 	radius: number,
 	speed: number?, -- скорость рывка или волны
 	count: number?, -- сколько врагов призывает Summon
+	--[[
+		Кого именно призывает Summon. nil — случайных из тех, что населяют
+		уровень; ключ — всегда этого врага. Шаман зовёт своих гоблинов,
+		и это его характер, а не то, что подвернулось в текущей волне.
+	]]
+	summonKey: string?,
+	duration: number?, -- сколько живёт поле
+	tickInterval: number?, -- как часто поле срабатывает
+	heal: number?, -- сколько здоровья возвращает лечащее поле за тик
 }
+
+--[[
+	Стойкое поле на арене. Уходит на клиент один раз при появлении: круг
+	не двигается, а сколько ему осталось, клиент отсчитывает сам.
+]]
+export type BossFieldKind = "Heal" | "Poison"
 
 --[[
 	Фаза боссфайта. Действует та фаза, у которой healthAbove не больше текущей
@@ -275,6 +445,14 @@ export type PetModel = {
 	size: Vector3,
 	shape: "Block" | "Ball" | "Cylinder",
 	neon: boolean,
+	--[[
+		Летает ли питомец рядом с игроком (M7). Наземные держатся у земли
+		и подпрыгивают на бегу, летающие висят выше и покачиваются.
+
+		Это данные, а не вывод из стихии: сова и дракон летают, а рысь и гончая
+		нет, хотя стихии у них общие с летающими.
+	]]
+	flies: boolean,
 }
 
 export type PetDef = {
@@ -296,6 +474,18 @@ export type PetInstance = {
 	petId: string,
 	level: number,
 	xp: number,
+	--[[
+		Позиция на звёздной лестнице (M2+): 1..StarLadder.Total.
+
+		Одно число, а не «этап + звезда»: этап и номер внутри него выводятся
+		из позиции, и два поля, которые обязаны быть согласованы, разъехались бы
+		при первой же правке.
+
+		Стартовая позиция зависит от редкости (B ниже, SSS выше) — см.
+		Config/Pets. У питомцев, полученных до этой правки, поля нет: читать
+		его надо как «стартовая позиция своей редкости».
+	]]
+	stars: number,
 }
 
 --[[
@@ -325,6 +515,34 @@ export type PetView = {
 	power: number,
 	upgradeCost: number, -- 0 означает «улучшать некуда»
 	equipped: boolean,
+	stars: number, -- позиция на звёздной лестнице
+	starMult: number, -- во сколько раз звёзды усилили бонусы питомца
+	evolve: EvolveView?, -- nil означает «дальше некуда»
+}
+
+--[[
+	Рецепт одной ступени эволюции.
+
+	copies — сколько нужно питомцев ТОГО ЖЕ вида, fodder — сколько любых.
+	У каждого своя требуемая позиция на лестнице: корм для фиолетовых
+	и красных ступеней всегда шестизвёздочный, а ранние ступени едят
+	питомцев своего уровня.
+]]
+export type EvolveRecipe = {
+	copies: number,
+	copyStars: number,
+	fodder: number,
+	fodderStars: number,
+}
+
+-- То же самое плюс то, что у игрока уже есть: панель показывает «2/3».
+export type EvolveView = {
+	copies: number,
+	copyStars: number,
+	fodder: number,
+	fodderStars: number,
+	haveCopies: number,
+	haveFodder: number,
 }
 
 export type PetsView = {
@@ -338,8 +556,10 @@ export type PetsView = {
 -- Результат одного ролла яйца. Дубликат не создаёт вторую запись, а даёт опыт.
 export type EggRollResult = {
 	petId: string,
+	-- Сколько таких питомцев стало в коллекции. Дубликат — это отдельный
+	-- питомец, а не опыт и не счётчик: из них строится эволюция.
 	duplicate: boolean,
-	xpGained: number,
+	owned: number,
 	level: number, -- уровень питомца после ролла
 }
 
@@ -572,6 +792,91 @@ export type StoreView = {
 }
 
 --[[
+	Обучение новичка (M7, раздел 4 ТЗ).
+
+	Что гасит подсказку боя. Список закрытый: и Config/Tutorial, и разбор
+	в TutorialController ссылаются на эти же имена, поэтому опечатка ловится
+	типизацией, а не подсказкой, которая молча висит до конца забега.
+
+		Move     — пока персонаж не сдвинулся с места;
+		Timer    — просто держится holdSeconds и уходит;
+		Crystal  — пока не подобран первый кристалл опыта;
+		LevelUp  — ждёт паузы левел-апа и висит, пока карточка не выбрана;
+		Boss     — ждёт выхода босса и висит holdSeconds.
+]]
+export type TutorialTrigger = "Move" | "Timer" | "Crystal" | "LevelUp" | "Boss"
+
+export type TutorialRunHint = {
+	id: string,
+	text: string,
+	trigger: TutorialTrigger,
+	--[[
+		Не показывать раньше этой секунды забега. Ноль — показывать сразу,
+		как дошла очередь. Нужно подсказкам, привязанным к моменту самого
+		уровня, а не к действию игрока: про усложнение по времени бессмысленно
+		говорить до того, как в бой войдёт второй тип врагов.
+	]]
+	waitSeconds: number,
+	--[[
+		Сколько держать подсказку. У Timer это вся её жизнь, у остальных —
+		потолок: подсказка уходит и по своему условию, и по этому времени,
+		чтобы игрок, не понявший её, не читал одно и то же весь забег.
+	]]
+	holdSeconds: number,
+}
+
+--[[
+	Чем закрывается шаг обучения в лобби.
+
+	Обязательным шаг делается только там, где выполнить его точно можно:
+	яйцо покупается ровно на выданную за туториал награду, предмет и очко
+	таланта тоже выданы этим же забегом. Всё остальное объясняется текстом
+	с кнопкой — иначе туториал застрянет на шаге, который игроку нечем
+	пройти (из яйца может выпасть дубликат стартового питомца, и экипировать
+	будет нечего).
+
+		Next        — прочитал и нажал кнопку;
+		OpenPanel   — открыл нужную панель (кнопкой или промптом у объекта);
+		EnterRun    — вошёл в бой;
+		BuyEgg      — купил яйцо;
+		SpendTalent — вложил очко таланта;
+		EquipItem   — надел предмет.
+]]
+export type TutorialAdvance = "Next" | "OpenPanel" | "EnterRun" | "BuyEgg" | "SpendTalent" | "EquipItem"
+
+--[[
+	Шаг обучения в лобби.
+
+	panel — имя панели из LobbyController.openPanel: пока шаг идёт, открыть
+	можно только её. Пустая строка означает «шаг ничего не открывает и лобби
+	не ограничивает».
+
+	arrow — над каким объектом лобби висит стрелка. Имя то же, что у панели
+	(объекты подписаны атрибутом Panel на своём промпте), пустая строка —
+	без стрелки.
+]]
+export type TutorialStep = {
+	id: string,
+	text: string,
+	advance: TutorialAdvance,
+	panel: string,
+	arrow: string,
+}
+
+--[[
+	Состояние обучения, одним пуском при входе. Промежуточные шаги на сервер
+	не ходят: за туториал ничего не начисляется, валидировать нечего, а второй
+	счётчик шагов в профиле был бы вторым местом для одного факта.
+]]
+export type TutorialView = {
+	-- Обучающий забег ещё не выигран: в лобби идёт первая половина обучения,
+	-- а у портала доступен только он (раздел 4 ТЗ).
+	needsRun: boolean,
+	-- Вторая половина обучения (яйцо, питомец, талант, предмет) не пройдена.
+	needsLobbyTour: boolean,
+}
+
+--[[
 	Действия, которые игрок может запросить в лобби. Строка приходит с клиента,
 	поэтому список закрытый: всё, чего здесь нет, отбрасывается на входе.
 ]]
@@ -579,6 +884,7 @@ export type LobbyAction =
 	"BuyEgg"
 	| "EquipPet"
 	| "UpgradePet"
+	| "EvolvePet"
 	| "BuyLot"
 	| "ClaimOffline"
 	| "SpendTalent"
@@ -588,6 +894,61 @@ export type LobbyAction =
 	| "ClaimQuest"
 	| "EquipItem"
 	| "Refresh"
+	| "SetSetting"
+	| "TutorialDone"
+	| "DebugBossFight"
+
+--[[
+	Звуковой слот (M7). Список закрытый: и Config/Sounds, и все места, которые
+	просят звук, ссылаются на эти же имена, поэтому опечатка в строке ловится
+	типизацией, а не молчанием в бою.
+]]
+export type SoundSlot =
+	"Hit"
+	| "EnemyDeath"
+	| "CrystalPickup"
+	| "LevelUp"
+	| "CardChosen"
+	| "PlayerHit"
+	| "PlayerDeath"
+	| "BossSpawn"
+	| "BossDeath"
+	| "StageVictory"
+	| "ButtonClick"
+	| "Purchase"
+	| "EggOpen"
+	| "WheelSpin"
+	| "MusicLobby"
+	| "MusicCombat"
+
+--[[
+	Настройки игрока (M7, раздел 2.1 ТЗ). Хранятся в профиле — другой
+	персистентности в Roblox нет.
+
+	quality = "Auto" не фиксируется на устройстве один раз при первом входе:
+	это режим, который клиент разворачивает в High/Low по текущему вьюпорту
+	каждый раз сам (SettingsController.ResolveQuality). Так режим остаётся
+	верным, даже если игрок зашёл с телефона, а потом с компьютера.
+]]
+export type QualityMode = "Auto" | "High" | "Low"
+
+--[[
+	Эффекты донатной косметики других игроков в лобби (раздел 2.1 ТЗ). Хранится
+	и показывается в настройках уже сейчас, но применить пока негде: ни одного
+	Trail/ParticleEmitter/Highlight на экипировке в проекте нет — M6 сделал
+	только числовые статы предметов. Поле ждёт визуальную косметику, а не
+	наоборот.
+]]
+export type OthersEffectsMode = "All" | "Nearby" | "Off"
+
+export type ProfileSettings = {
+	quality: QualityMode,
+	othersEffects: OthersEffectsMode,
+	sfxVolume: number, -- 0..1
+	musicVolume: number, -- 0..1
+	-- Видимость панели DamageMeter (счётчик урона по способностям, M2).
+	showDamageMeter: boolean,
+}
 
 --[[
 	Профиль игрока (раздел 6 ТЗ).
@@ -723,6 +1084,7 @@ export type ProfileData = {
 	daily: ProfileDaily,
 	offline: ProfileOffline,
 	purchases: ProfilePurchases,
+	settings: ProfileSettings,
 	stats: ProfileStats,
 }
 
@@ -738,6 +1100,7 @@ export type ProfileView = {
 	-- Первый непройденный сюжетный уровень (M6): по нему панель у портала
 	-- решает, что уже открыто.
 	storyStage: number,
+	settings: ProfileSettings,
 }
 
 -- Итоги забега, собранные сервером из серверного же состояния.
