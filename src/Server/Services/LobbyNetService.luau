@@ -34,7 +34,9 @@ local PetService = require(script.Parent.PetService)
 local PurchaseService = require(script.Parent.PurchaseService)
 local QuestService = require(script.Parent.QuestService)
 local RateLimiter = require(Shared.Util.RateLimiter)
+local StageService = require(script.Parent.StageService)
 local TalentService = require(script.Parent.TalentService)
+local TutorialService = require(script.Parent.TutorialService)
 local Types = require(Shared.Types)
 local WheelService = require(script.Parent.WheelService)
 
@@ -69,6 +71,7 @@ local ALLOWED_ACTIONS: { Types.LobbyAction } = {
 	"BuyEgg",
 	"EquipPet",
 	"UpgradePet",
+	"EvolvePet",
 	"BuyLot",
 	"ClaimOffline",
 	"SpendTalent",
@@ -78,6 +81,9 @@ local ALLOWED_ACTIONS: { Types.LobbyAction } = {
 	"ClaimQuest",
 	"EquipItem",
 	"Refresh",
+	"SetSetting",
+	"TutorialDone",
+	"DebugBossFight",
 }
 
 local ALLOWED: { [string]: boolean } = {}
@@ -145,6 +151,12 @@ local function handle(player: Player, action: string, target: string?, extra: un
 		-- Сутки могли смениться, пока игрок был в бою.
 		QuestService.EnsureFresh(player)
 		QuestService.PushView(player)
+		--[[
+			Обучение: Refresh приходит и после возвращения из боя, то есть
+			ровно тогда, когда обязательный забег закончился и пора вести
+			тур по лобби. Второго канала под это заводить не надо.
+		]]
+		TutorialService.PushView(player)
 		DataService.PushView(player)
 		return
 	end
@@ -161,8 +173,42 @@ local function handle(player: Player, action: string, target: string?, extra: un
 		кулдаун входа. Здесь только разбор аргументов.
 	]]
 	if action == "EnterRun" then
-		local mode: Types.RunMode = if target == "Story" then "Story" else "Endless"
+		--[[
+			Режим — из закрытого списка, а не «всё, что не Story, — Endless»:
+			с появлением обучающего режима (M7) такая развилка молча пускала бы
+			опечатку в бесконечный режим.
+		]]
+		local mode: Types.RunMode
+		if target == "Story" then
+			mode = "Story"
+		elseif target == "Tutorial" then
+			mode = "Tutorial"
+		elseif target == "Endless" then
+			mode = "Endless"
+		else
+			return
+		end
+
 		CombatService.BeginRun(player, mode, readCount(extra))
+		return
+	end
+
+	--[[
+		Тестовые кнопки боссов (M7): по одной на локацию, номер уровня приходит
+		третьим аргументом. CombatService сам не пускает их мимо Studio.
+	]]
+	if action == "DebugBossFight" then
+		CombatService.BeginBossFightTest(player, readCount(extra))
+		return
+	end
+
+	--[[
+		Тур по лобби пройден (M7, раздел 4 ТЗ). Аргументов нет и быть не может:
+		шаги тура — это клиентский рисунок, а на сервере от него остаётся один
+		флаг «обучение закончено».
+	]]
+	if action == "TutorialDone" then
+		TutorialService.Complete(player)
 		return
 	end
 
@@ -210,6 +256,18 @@ local function handle(player: Player, action: string, target: string?, extra: un
 		return
 	end
 
+	--[[
+		Настройки (M7, раздел 2.1 ТЗ). target — ключ поля, extra — значение;
+		разбор и вся валидация — внутри DataService.SetSetting, здесь только
+		передача. Сообщение об ошибке не шлём: неверное значение — это либо
+		рассинхрон версий клиента и сервера, либо испорченный ввод, а не то,
+		что нужно объяснять игроку.
+	]]
+	if action == "SetSetting" then
+		DataService.SetSetting(player, target, extra)
+		return
+	end
+
 	if action == "EquipPet" then
 		local _, message = PetService.Equip(player, target)
 		notify(player, message)
@@ -218,6 +276,12 @@ local function handle(player: Player, action: string, target: string?, extra: un
 
 	if action == "UpgradePet" then
 		local _, message = PetService.Upgrade(player, target)
+		notify(player, message)
+		return
+	end
+
+	if action == "EvolvePet" then
+		local _, message = PetService.Evolve(player, target)
 		notify(player, message)
 		return
 	end
@@ -277,8 +341,10 @@ local function onPlayerAdded(player: Player): ()
 	end
 
 	PetService.GrantStarterIfNeeded(player)
+	StageService.DebugUnlockIfNeeded(player)
 	OfflineService.Accrue(player)
 	QuestService.EnsureFresh(player)
+	WheelService.DebugResetIfNeeded(player)
 
 	PetService.PushView(player)
 	TalentService.PushView(player)
