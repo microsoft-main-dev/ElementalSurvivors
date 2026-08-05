@@ -69,8 +69,44 @@ type Sim = {
 	damageMult: number,
 	speedMult: number,
 
-	-- Список врагов уровня. Пустой означает «брать из расписания волн».
-	enemyTypes: { string },
+	--[[
+		Расписание врагов уровня: кто и с какой секунды. Пустое означает
+		«локации нет» (бесконечный режим) — тогда состав берётся из волн.
+
+		activeTypes — уже введённые в бой ключи, курсор идёт по schedule
+		вперёд и никогда не возвращается: время забега не убывает.
+	]]
+	enemySchedule: { Types.StageEnemy },
+	activeTypes: { string },
+	activeCount: number,
+	scheduleCursor: number,
+
+	--[[
+		Сколько стрелков сейчас на арене. Считается отдельно от общего числа
+		живых: у них свой потолок, и перебирать ради него всех врагов каждый
+		спавн было бы дороже, чем держать счётчик.
+	]]
+	rangedAlive: number,
+
+	--[[
+		Стрелки (архетип Ranged). Кулдаун — по id врага, а снаряды лежат
+		в собственных плоских массивах: их единицы, но заводить под них
+		Instance или таблицу на штуку незачем — схема та же, что у врагов
+		и у снарядов способностей.
+	]]
+	shootCooldown: { number },
+	shotPosition: { Vector3 },
+	shotDirection: { Vector3 },
+	shotDamage: { number },
+	shotSpeed: { number },
+	shotHitRadius: { number },
+	shotLife: { number },
+	shotDelay: { number },
+	shotAlive: { boolean },
+	shotFree: { number },
+	shotFreeCount: number,
+	shotHighWater: number,
+	shotQueue: { { x: number, z: number, dx: number, dz: number, delay: number, speed: number, life: number } },
 
 	--[[
 		Спавн выключается в конце фазы выживания: босс выходит на пустую арену
@@ -88,6 +124,9 @@ type Sim = {
 	positions: { Vector3 },
 	nextPositions: { Vector3 },
 	hp: { number },
+	-- Здоровье при спавне. Нужно только затем, чтобы клиент мог нарисовать
+	-- полоску: доля считается при упаковке ресинка, а не хранится отдельно.
+	maxHp: { number },
 	typeId: { number },
 	phase: { number },
 	alive: { boolean },
@@ -154,6 +193,7 @@ local deathHandler: ((slot: number, player: Player, position: Vector3, xp: numbe
 
 local eventsRemote: RemoteEvent? = nil
 local resyncRemote: UnreliableRemoteEvent? = nil
+local shotsRemote: UnreliableRemoteEvent? = nil
 
 local function getPlayerLocalPosition(sim: Sim): Vector3?
 	local character = sim.player.Character
@@ -202,6 +242,11 @@ end
 local function release(sim: Sim, id: number, reason: number): ()
 	sim.alive[id] = false
 	sim.aliveCount -= 1
+
+	-- Стрелки считаются отдельно: у них свой потолок присутствия на арене.
+	if Enemies.List[sim.typeId[id]].ranged then
+		sim.rangedAlive -= 1
+	end
 	sim.freeCount += 1
 	sim.freeList[sim.freeCount] = id
 
@@ -227,13 +272,130 @@ local function spawnOne(sim: Sim, def: EnemyDef, center: Vector3, radius: number
 
 	sim.positions[id] = position
 	sim.nextPositions[id] = position
-	sim.hp[id] = def.stats.health * sim.healthMult
+	local health = def.stats.health * sim.healthMult
+	sim.hp[id] = health
+	sim.maxHp[id] = health
+
+	--[[
+		Кулдаун выстрела сбрасывается при спавне обязательно: id
+		переиспользуются, и новый стрелок унаследовал бы остаток от предыдущего
+		владельца этого id — то есть выстрелил бы сразу, едва появившись.
+	]]
+	if def.ranged then
+		sim.shootCooldown[id] = def.ranged.cooldown
+	end
 	sim.typeId[id] = def.typeId
 	sim.phase[id] = sim.rng.NextNumber(0, 6.28)
 	sim.alive[id] = true
 	sim.aliveCount += 1
+	if def.ranged then
+		sim.rangedAlive += 1
+	end
 
 	pushEvent(sim, Packet.Kind.Spawn, id, def.typeId, position.X, position.Z)
+end
+
+--[[
+	Из кого спавнить прямо сейчас. Возвращает список и сколько его первых
+	элементов разрешено брать.
+
+	Состав врагов — вторая половина усложнения уровня по времени (первая —
+	плотность): минуту идут только самые слабые типы локации, дальше
+	расписание вводит следующие. Список локации отсортирован от слабого
+	к сильному, поэтому «первые N» — это и есть постепенное усложнение.
+
+	Забег без локации (бесконечный режим) берёт состав прямо из расписания.
+	Отдельная функция, а не две строки на месте, потому что мест два —
+	обычный спавн и призыв босса, — и разъехаться им нельзя.
+]]
+local function currentTypes(sim: Sim, wave: Types.WaveEntry): ({ string }, number)
+	if #sim.enemySchedule == 0 then
+		return wave.types, #wave.types
+	end
+
+	--[[
+		Курсор идёт вперёд по расписанию, пока очередной враг не окажется
+		в будущем. Расписание отсортировано по времени, время забега не убывает,
+		поэтому за весь забег этот цикл суммарно сделает столько шагов, сколько
+		в расписании записей.
+	]]
+	while sim.scheduleCursor <= #sim.enemySchedule do
+		local entry = sim.enemySchedule[sim.scheduleCursor]
+		if entry.fromSeconds > sim.time then
+			break
+		end
+		sim.activeCount += 1
+		sim.activeTypes[sim.activeCount] = entry.key
+		sim.scheduleCursor += 1
+	end
+
+	return sim.activeTypes, sim.activeCount
+end
+
+--[[
+	Свободный слот под вражеский снаряд.
+
+	Свободный список, как у врагов и у снарядов способностей: снарядов
+	стрелков на арене единицы, но выделять таблицу на каждый выстрел ради
+	этого всё равно незачем.
+]]
+local function allocateShot(sim: Sim): number?
+	if sim.shotFreeCount > 0 then
+		local id = sim.shotFree[sim.shotFreeCount]
+		sim.shotFreeCount -= 1
+		return id
+	end
+
+	if sim.shotHighWater >= Balance.Combat.maxEnemyShots then
+		return nil
+	end
+
+	sim.shotHighWater += 1
+	return sim.shotHighWater
+end
+
+local function releaseShot(sim: Sim, id: number): ()
+	sim.shotAlive[id] = false
+	sim.shotFreeCount += 1
+	sim.shotFree[sim.shotFreeCount] = id
+end
+
+--[[
+	Потолок стрелков на арене прямо сейчас.
+
+	Доля от текущего потолка живых, зажатая снизу и сверху: четверо в начале
+	забега и десять к концу. Растёт вместе с толпой, но не превращает бой
+	в град стрел.
+]]
+local function rangedLimit(wave: Types.WaveEntry): number
+	local numbers = Balance.Combat
+	return math.clamp(math.floor(wave.maxAlive * numbers.rangedShare + 0.5), numbers.rangedMin, numbers.rangedMax)
+end
+
+--[[
+	Кого спавнить из активного набора.
+
+	Обычно это случайный тип, но у стрелков есть свой потолок: когда он выбран,
+	выбор смещается на следующий тип по кругу, а не отменяет спавн вовсе —
+	иначе к концу забега арена пустела бы каждый раз, когда роллом выпадал
+	стрелок. Обход по кругу конечен: типов единицы.
+]]
+local function pickSpawnType(sim: Sim, types: { string }, count: number, wave: Types.WaveEntry): EnemyDef?
+	if count <= 0 then
+		return nil
+	end
+
+	local start = sim.rng.NextInteger(1, count)
+	local limit = rangedLimit(wave)
+
+	for offset = 0, count - 1 do
+		local def = Enemies.ByKey[types[(start + offset - 1) % count + 1]]
+		if def and (not def.ranged or sim.rangedAlive < limit) then
+			return def
+		end
+	end
+
+	return nil
 end
 
 local function spawnStep(sim: Sim, dt: number, playerLocal: Vector3): ()
@@ -252,16 +414,47 @@ local function spawnStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 
 	sim.spawnCredit += wave.spawnRate * dt
 
-	-- Набор врагов задаёт локация, если она есть; иначе расписание волн.
-	local types = if #sim.enemyTypes > 0 then sim.enemyTypes else wave.types
+	local types, count = currentTypes(sim, wave)
+	-- Никого ещё не ввели в бой: спавнить нечего, и выбирать случайного
+	-- из пустого набора нельзя.
+	if count == 0 then
+		sim.spawnCredit = 0
+		return
+	end
 
 	while sim.spawnCredit >= 1 and sim.aliveCount < wave.maxAlive do
 		sim.spawnCredit -= 1
-		local key = sim.rng.NextChoice(types)
-		local def = Enemies.ByKey[key]
+		local def = pickSpawnType(sim, types, count, wave)
 		if def then
 			spawnOne(sim, def, playerLocal, Balance.Combat.spawnRadius)
 		end
+	end
+end
+
+--[[
+	Спавн конкретного типа в точке — разделение Splitter при смерти.
+
+	Отдельно от SpawnBurst: тот берёт случайного из текущего набора уровня,
+	а здесь тип известен заранее и случайность не нужна вовсе.
+
+	Потолок живых соблюдается: мега-слизень, лопнувший на переполненной арене,
+	не должен пробивать ограничение, на котором держится производительность.
+]]
+local function spawnSplit(sim: Sim, split: Types.EnemySplit, position: Vector3): ()
+	local def = Enemies.ByKey[split.key]
+	if not def then
+		warn(`[EnemyService] Неизвестный враг деления "{split.key}"`)
+		return
+	end
+
+	local wave = currentWave(sim)
+	for _ = 1, split.count do
+		if sim.aliveCount >= wave.maxAlive then
+			break
+		end
+		-- Радиус разлёта — по размеру самого потомка: иначе половинки
+		-- рождаются внутри друг друга и первым делом расталкиваются.
+		spawnOne(sim, def, position, def.stats.radius * 2)
 	end
 end
 
@@ -271,21 +464,36 @@ end
 	Потолок живых соблюдается: призыв не должен пробивать ограничение,
 	на котором держится производительность.
 ]]
-function EnemyService.SpawnBurst(slot: number, center: Vector3, count: number, radius: number): number
+function EnemyService.SpawnBurst(slot: number, center: Vector3, count: number, radius: number, key: string?): number
 	local sim = sims[slot]
 	if not sim then
 		return 0
 	end
 
 	local wave = currentWave(sim)
-	local types = if #sim.enemyTypes > 0 then sim.enemyTypes else wave.types
 	local spawned = 0
+
+	--[[
+		Ключ задан — призывается именно этот враг. Так шаман зовёт своих
+		гоблинов, а не случайных обитателей уровня: «призывает мечников» —
+		это его характер, а не то, что подвернулось в текущей волне.
+	]]
+	local fixed = if key then Enemies.ByKey[key] else nil
+	if key and not fixed then
+		warn(`[EnemyService] Неизвестный призываемый враг "{key}"`)
+		return 0
+	end
+
+	local types, typeCount = currentTypes(sim, wave)
+	if not fixed and typeCount == 0 then
+		return 0
+	end
 
 	for _ = 1, count do
 		if sim.aliveCount >= wave.maxAlive then
 			break
 		end
-		local def = Enemies.ByKey[sim.rng.NextChoice(types)]
+		local def = fixed or pickSpawnType(sim, types, typeCount, wave)
 		if def then
 			spawnOne(sim, def, center, radius)
 			spawned += 1
@@ -323,8 +531,19 @@ local function moveStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 		if alive[id] then
 			local def = Enemies.List[typeIds[id]]
 			local position = positions[id]
+			local speed = def.stats.speed * speedMult
 
-			position = EnemyMotion.Chase(position, playerLocal, def.stats.speed * speedMult, dt)
+			--[[
+				Стрелок держит дистанцию, остальные бегут вплотную. В фазе
+				добивания стрелок тоже бежит: там задача не стрелять, а дойти,
+				иначе он останется стоять в углу и подвесит выход босса.
+			]]
+			local ranged = def.ranged
+			if ranged and not sim.sweeping then
+				position = EnemyMotion.KeepRange(position, playerLocal, speed, dt, ranged.range, ranged.motionMargin)
+			else
+				position = EnemyMotion.Chase(position, playerLocal, speed, dt)
+			end
 
 			local count = hash.Collect(position, separationRadius, neighbours)
 			position = EnemyMotion.Separation(
@@ -361,6 +580,137 @@ local function moveStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 	-- Так шаг детерминирован и его можно будет посчитать параллельно.
 	sim.positions = nextPositions
 	sim.nextPositions = positions
+end
+
+--[[
+	Выстрелы стрелков.
+
+	Порядок такой же, как у босса: сначала трассер, потом удар. Снаряд
+	рождается не сразу, а через telegraph секунд — ровно столько у игрока есть,
+	чтобы уйти с линии. Летит по прямой в точку, где игрок был в момент
+	выстрела: самонаведение отняло бы у уклонения всякий смысл.
+
+	Кулдаун у каждого стрелка свой и тикает даже когда он вне дистанции —
+	иначе подошедший стрелок стрелял бы залпом за всё время ожидания.
+]]
+local function shootStep(sim: Sim, dt: number, playerLocal: Vector3): ()
+	local positions = sim.positions
+	local alive = sim.alive
+	local typeIds = sim.typeId
+	local cooldowns = sim.shootCooldown
+	local queued = 0
+
+	for id = 1, sim.highWater do
+		if not alive[id] then
+			continue
+		end
+
+		local ranged = Enemies.List[typeIds[id]].ranged
+		if not ranged then
+			continue
+		end
+
+		local remaining = (cooldowns[id] or ranged.cooldown) - dt
+		if remaining > 0 then
+			cooldowns[id] = remaining
+			continue
+		end
+
+		local position = positions[id]
+		local dx = playerLocal.X - position.X
+		local dz = playerLocal.Z - position.Z
+		local distance = math.sqrt(dx * dx + dz * dz)
+
+		-- Вне дистанции не стреляет, но и кулдаун не копит: держим его
+		-- на нуле, чтобы выстрел случился сразу, как игрок войдёт в радиус.
+		if distance > ranged.range + ranged.motionMargin or distance < 1e-3 then
+			cooldowns[id] = 0
+			continue
+		end
+
+		cooldowns[id] = ranged.cooldown
+
+		local dirX, dirZ = dx / distance, dz / distance
+		local shotId = allocateShot(sim)
+		if shotId then
+			sim.shotPosition[shotId] = position
+			sim.shotDirection[shotId] = Vector3.new(dirX, 0, dirZ)
+			sim.shotDamage[shotId] = ranged.damage
+			sim.shotSpeed[shotId] = ranged.speed
+			sim.shotHitRadius[shotId] = ranged.hitRadius
+			sim.shotLife[shotId] = ranged.lifetime
+			-- Пока задержка не вышла, снаряд не летит и не бьёт: на экране
+			-- в это время трассер.
+			sim.shotDelay[shotId] = ranged.telegraph
+			sim.shotAlive[shotId] = true
+		end
+
+		queued += 1
+		sim.shotQueue[queued] = {
+			x = position.X,
+			z = position.Z,
+			dx = dirX,
+			dz = dirZ,
+			delay = ranged.telegraph,
+			speed = ranged.speed,
+			life = ranged.lifetime,
+		}
+	end
+
+	if queued > 0 then
+		local remote = shotsRemote
+		if remote then
+			local payload = table.create(queued)
+			for index = 1, queued do
+				payload[index] = sim.shotQueue[index]
+			end
+			remote:FireClient(sim.player, payload)
+		end
+	end
+end
+
+--[[
+	Полёт вражеских снарядов и попадание по игроку.
+
+	Цель одна — игрок, поэтому ни хеша, ни списка целей тут не нужно:
+	одна проверка расстояния на снаряд.
+]]
+local function shotStep(sim: Sim, dt: number, playerLocal: Vector3): ()
+	local handler = contactHandler
+	local reach = Balance.Combat.playerRadius
+
+	for id = 1, sim.shotHighWater do
+		if not sim.shotAlive[id] then
+			continue
+		end
+
+		local delay = sim.shotDelay[id]
+		if delay > 0 then
+			sim.shotDelay[id] = delay - dt
+			continue
+		end
+
+		local life = sim.shotLife[id] - dt
+		if life <= 0 then
+			releaseShot(sim, id)
+			continue
+		end
+		sim.shotLife[id] = life
+
+		local position = sim.shotPosition[id] + sim.shotDirection[id] * (sim.shotSpeed[id] * dt)
+		sim.shotPosition[id] = position
+
+		local dx = position.X - playerLocal.X
+		local dz = position.Z - playerLocal.Z
+		local hit = sim.shotHitRadius[id] + reach
+
+		if dx * dx + dz * dz <= hit * hit then
+			if handler then
+				handler(sim.player, sim.shotDamage[id])
+			end
+			releaseShot(sim, id)
+		end
+	end
 end
 
 local function contactStep(sim: Sim, playerLocal: Vector3): ()
@@ -492,7 +842,10 @@ local function replicationStep(sim: Sim, dt: number): ()
 		if found > 0 then
 			local remote = resyncRemote
 			if remote then
-				remote:FireClient(sim.player, Packet.WriteResync(sim.resyncIds, sim.positions, found))
+				remote:FireClient(
+					sim.player,
+					Packet.WriteResync(sim.resyncIds, sim.positions, sim.hp, sim.maxHp, found)
+				)
 			end
 		end
 	end
@@ -508,6 +861,9 @@ local function step(sim: Sim, dt: number): ()
 
 	spawnStep(sim, dt, playerLocal)
 	moveStep(sim, dt, playerLocal)
+	-- Выстрелы после движения: стрелок целится оттуда, где он уже стоит.
+	shootStep(sim, dt, playerLocal)
+	shotStep(sim, dt, playerLocal)
 	contactStep(sim, playerLocal)
 	cullStep(sim, dt, playerLocal)
 end
@@ -547,6 +903,7 @@ end
 function EnemyService.Init(): ()
 	eventsRemote = Net.GetEvent(Net.Id.EnemyEvents)
 	resyncRemote = Net.GetUnreliable(Net.Id.EnemyResync)
+	shotsRemote = Net.GetUnreliable(Net.Id.EnemyShots)
 end
 
 function EnemyService.Start(): ()
@@ -605,7 +962,25 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		healthMult = if stage then stage.enemyHealthMult else 1,
 		damageMult = if stage then stage.enemyDamageMult else 1,
 		speedMult = if stage then stage.enemySpeedMult else 1,
-		enemyTypes = if stage then stage.enemyTypes else {},
+		enemySchedule = if stage then stage.enemies else {},
+		activeTypes = {},
+		activeCount = 0,
+		scheduleCursor = 1,
+		rangedAlive = 0,
+
+		shootCooldown = {},
+		shotPosition = {},
+		shotDirection = {},
+		shotDamage = {},
+		shotSpeed = {},
+		shotHitRadius = {},
+		shotLife = {},
+		shotDelay = {},
+		shotAlive = {},
+		shotFree = {},
+		shotFreeCount = 0,
+		shotHighWater = 0,
+		shotQueue = {},
 
 		spawnEnabled = true,
 		sweeping = false,
@@ -613,6 +988,7 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		positions = table.create(CAPACITY, Vector3.zero),
 		nextPositions = table.create(CAPACITY, Vector3.zero),
 		hp = table.create(CAPACITY, 0),
+		maxHp = table.create(CAPACITY, 0),
 		typeId = table.create(CAPACITY, 1),
 		phase = table.create(CAPACITY, 0),
 		alive = table.create(CAPACITY, false),
@@ -719,6 +1095,72 @@ function EnemyService.SetDeathHandler(handler: (slot: number, player: Player, po
 	deathHandler = handler
 end
 
+--[[
+	Лечение врагов в радиусе — исцеляющее поле босса-шамана.
+
+	Лечит до исходного здоровья и не воскрешает: мёртвый id уже свободен
+	и мог быть выдан новому врагу.
+]]
+function EnemyService.Heal(slot: number, position: Vector3, radius: number, amount: number): number
+	local sim = sims[slot]
+	if not sim or amount <= 0 then
+		return 0
+	end
+
+	local count = sim.hash.Collect(position, radius + maxEnemyRadius, sim.neighbours)
+	local healed = 0
+
+	for index = 1, count do
+		local id = sim.neighbours[index]
+		if sim.alive[id] then
+			local maximum = sim.maxHp[id]
+			local current = sim.hp[id]
+			if current < maximum then
+				sim.hp[id] = math.min(current + amount, maximum)
+				healed += 1
+			end
+		end
+	end
+
+	return healed
+end
+
+--[[
+	Точка, вокруг которой врагов больше всего, — куда шаману ставить лечение.
+
+	Не перебор всей арены: берём несколько живых врагов и считаем соседей
+	у каждого. Идеального центра это не даёт, но «где толпа» определяет
+	уверенно и стоит несколько запросов к хешу вместо сотен.
+]]
+function EnemyService.FindCluster(slot: number, radius: number, samples: number): Vector3?
+	local sim = sims[slot]
+	if not sim or sim.aliveCount == 0 then
+		return nil
+	end
+
+	local best: Vector3? = nil
+	local bestCount = 0
+	local checked = 0
+	local cursor = 0
+
+	while checked < samples and cursor < sim.highWater do
+		cursor += 1
+		if not sim.alive[cursor] then
+			continue
+		end
+
+		checked += 1
+		local position = sim.positions[cursor]
+		local count = sim.hash.Collect(position, radius, sim.neighbours)
+		if count > bestCount then
+			bestCount = count
+			best = position
+		end
+	end
+
+	return best
+end
+
 -- Возвращает «убит ли» и сколько урона реально прошло (для счётчика по способностям).
 function EnemyService.Damage(slot: number, id: number, amount: number): (boolean, number)
 	local sim = sims[slot]
@@ -744,6 +1186,19 @@ function EnemyService.Damage(slot: number, id: number, amount: number): (boolean
 	local handler = deathHandler
 	if handler then
 		handler(slot, sim.player, position, def.stats.xp)
+	end
+
+	--[[
+		Разделение (архетип Splitter) — только здесь, то есть только при смерти
+		от урона. В release по потолку живых и в ClearAll его нет намеренно:
+		враг, уничтоженный ради освобождения места, не должен плодить новых.
+
+		После хука смерти, а не до: сначала игрок получает опыт за убитого,
+		потом на арене появляются потомки.
+	]]
+	local split = def.splitInto
+	if split then
+		spawnSplit(sim, split, position)
 	end
 
 	return true, dealt

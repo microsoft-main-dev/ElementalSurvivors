@@ -35,6 +35,50 @@ function EnemyMotion.Chase(position: Vector3, target: Vector3, speed: number, dt
 end
 
 --[[
+	Движение стрелка: держать дистанцию, а не бежать вплотную.
+
+	Ближе preferredRange — отходит, дальше preferredRange + margin — подходит,
+	между ними стоит и стреляет. Полоса нужна обязательно: без неё враг на
+	границе дёргался бы вперёд-назад каждый кадр.
+
+	Живёт здесь, а не на сервере, по той же причине, что и Chase: движение
+	врагов повторяет клиент, и поведение, известное только серверу, разошлось бы
+	картинкой с уроном.
+]]
+function EnemyMotion.KeepRange(
+	position: Vector3,
+	target: Vector3,
+	speed: number,
+	dt: number,
+	preferredRange: number,
+	margin: number
+): Vector3
+	local dx = target.X - position.X
+	local dz = target.Z - position.Z
+	local distanceSquared = dx * dx + dz * dz
+
+	if distanceSquared < 1e-6 then
+		return position
+	end
+
+	local distance = math.sqrt(distanceSquared)
+
+	if distance > preferredRange + margin then
+		return EnemyMotion.Chase(position, target, speed, dt)
+	end
+
+	if distance >= preferredRange then
+		-- В своей полосе: стоит и стреляет.
+		return position
+	end
+
+	-- Слишком близко — отходит спиной по той же прямой.
+	local step = speed * dt
+	local inverse = step / distance
+	return Vector3.new(position.X - dx * inverse, 0, position.Z - dz * inverse)
+end
+
+--[[
 	Мягкое расталкивание соседей, чтобы толпа не слипалась в одну точку.
 
 	neighbourIds/positions — результат SpatialHash.Collect: массив индексов

@@ -28,16 +28,20 @@
 
 	Публичный API:
 		StageService.Begin(slot, player, stageIndex) -> StageDef?
-		StageService.Tick(slot, dt)
+		StageService.BeginTutorial(slot, player)     -> StageDef
+		StageService.Tick(slot, dt, playerLocal)
 		StageService.GetPhase(slot)                  -> StagePhase?
 		StageService.GetStage(slot)                  -> StageDef?
 		StageService.StopRun(slot)
 		StageService.CanPlay(player, stageIndex)     -> boolean
 		StageService.HighestUnlocked(player)         -> number
 		StageService.SetVictoryHandler(fn)
+		StageService.DebugUnlockIfNeeded(player)
+		StageService.DebugRushToBoss(slot, playerLocal)
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
@@ -58,6 +62,13 @@ type State = {
 	phase: StagePhase,
 	sweepTimer: number,
 	sweeping: boolean,
+	--[[
+		Обучающий уровень (M7). Отличается ровно одним: победа над его боссом
+		не двигает сюжетный прогресс. Всё остальное — фазы, добивание, босс —
+		у него общее с настоящим уровнем намеренно: туториал, показывающий
+		механики, которых потом не будет, не учит ничему.
+	]]
+	isTutorial: boolean,
 }
 
 local StageService = {}
@@ -86,10 +97,14 @@ local function setPhase(state: State, phase: StagePhase): ()
 	pushPhase(state)
 end
 
-local function beginBoss(state: State): ()
+--[[
+	Выход босса. Позиция игрока нужна затем, чтобы босс не родился на нём:
+	раньше он появлялся в центре арены, куда игрока и ставит спавн.
+]]
+local function beginBoss(state: State, playerLocal: Vector3): ()
 	setPhase(state, "Boss")
 	EnemyService.SetSweeping(state.slot, false)
-	BossService.Spawn(state.slot, state.player, state.stage.bossKey, state.stage.bossHealth)
+	BossService.Spawn(state.slot, state.player, state.stage.bossKey, state.stage.bossHealth, playerLocal)
 end
 
 --[[
@@ -102,6 +117,20 @@ function StageService.HighestUnlocked(player: Player): number
 		return 1
 	end
 	return math.min(data.progress.storyStage, Stages.TotalLevels)
+end
+
+--[[
+	Открыть весь сюжет (Balance.Debug.unlockAllStages).
+
+	Проверка на Studio стоит здесь, а не в конфиге, тем же приёмом, что
+	у WheelService.DebugResetIfNeeded: значение можно забыть включённым,
+	и единственная защита — та, мимо которой нельзя пройти.
+]]
+function StageService.DebugUnlockIfNeeded(player: Player): ()
+	if not RunService:IsStudio() or not Balance.Debug.unlockAllStages then
+		return
+	end
+	DataService.DebugUnlockStages(player, Stages.TotalLevels)
 end
 
 --[[
@@ -118,26 +147,38 @@ function StageService.CanPlay(player: Player, stageIndex: number): boolean
 	return stageIndex <= StageService.HighestUnlocked(player)
 end
 
-function StageService.Begin(slot: number, player: Player, stageIndex: number): StageDef?
-	local stage = Stages.Get(stageIndex)
-	if not stage then
-		return nil
-	end
-
-	states[slot] = {
+local function beginWith(slot: number, player: Player, stage: StageDef, isTutorial: boolean): StageDef
+	local state: State = {
 		slot = slot,
 		player = player,
 		stage = stage,
 		phase = "Survival",
 		sweepTimer = 0,
 		sweeping = false,
+		isTutorial = isTutorial,
 	}
+	states[slot] = state
 
-	pushPhase(states[slot])
+	pushPhase(state)
 	return stage
 end
 
-function StageService.Tick(slot: number, dt: number): ()
+function StageService.Begin(slot: number, player: Player, stageIndex: number): StageDef?
+	local stage = Stages.Get(stageIndex)
+	if not stage then
+		return nil
+	end
+
+	return beginWith(slot, player, stage, false)
+end
+
+-- Обучающий уровень (M7, раздел 4 ТЗ). Номера у него нет: он собирается
+-- из первого сюжетного и в сюжетной нумерации не участвует.
+function StageService.BeginTutorial(slot: number, player: Player): StageDef
+	return beginWith(slot, player, Stages.Tutorial(), true)
+end
+
+function StageService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 	local state = states[slot]
 	if not state then
 		return
@@ -158,7 +199,7 @@ function StageService.Tick(slot: number, dt: number): ()
 		state.sweepTimer += dt
 
 		if EnemyService.GetAliveCount(slot) == 0 then
-			beginBoss(state)
+			beginBoss(state, playerLocal)
 			return
 		end
 
@@ -177,7 +218,7 @@ function StageService.Tick(slot: number, dt: number): ()
 						.. `они не дошли до игрока за {Balance.Stages.sweepTimeout} с`
 				)
 			end
-			beginBoss(state)
+			beginBoss(state, playerLocal)
 		end
 
 		return
@@ -195,13 +236,58 @@ local function onBossKilled(slot: number, player: Player): ()
 		return
 	end
 
+	--[[
+		Урон боссу и урон игроку считаются независимо, и добивающий удар
+		по боссу может прийти в тот же момент, когда игрока уже убили: без
+		этой проверки уровень засчитывался пройденным даже игроку, умершему
+		на боссе. Победа требует, чтобы игрок был жив в момент смерти босса.
+	]]
+	local character = player.Character
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") :: Humanoid? else nil
+	if not humanoid or humanoid.Health <= 0 then
+		return
+	end
+
 	setPhase(state, "Done")
-	DataService.AdvanceStoryStage(player, state.stage.index)
+
+	--[[
+		Обучающий уровень сюжет не двигает: он собран из первого уровня, и
+		засчитать его пройденным значило бы открыть второй уровень тому, кто
+		первый ещё не играл. Награду за него выдаёт TutorialService — она
+		одноразовая и живёт вместе с флагом обучения, а не с прогрессом.
+	]]
+	if not state.isTutorial then
+		DataService.AdvanceStoryStage(player, state.stage.index)
+	end
 
 	local handler = victoryHandler
 	if handler then
 		handler(slot, player)
 	end
+end
+
+--[[
+	Тестовая кнопка "BossFight" в лобби (M7): пропускает Survival и Sweep
+	и выводит босса сразу, чтобы проверять баланс боссов, не пережидая
+	фазу выживания заново на каждую правку.
+
+	Studio-only, проверка стоит здесь и только здесь — тем же приёмом,
+	что OfflineService.forcedElapsed: значение нельзя забыть включённым,
+	потому что включать тут нечего, рычаг — сама кнопка.
+]]
+function StageService.DebugRushToBoss(slot: number, playerLocal: Vector3): ()
+	if not RunService:IsStudio() then
+		return
+	end
+
+	local state = states[slot]
+	if not state or state.phase ~= "Survival" then
+		return
+	end
+
+	EnemyService.SetSpawnEnabled(slot, false)
+	EnemyService.ClearAll(slot)
+	beginBoss(state, playerLocal)
 end
 
 function StageService.GetPhase(slot: number): StagePhase?

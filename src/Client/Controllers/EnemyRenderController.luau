@@ -19,7 +19,8 @@
 	Ноль Instance.new в бою: все части берутся из пула.
 
 	Публичный API:
-		EnemyRenderController.GetActiveCount() -> number   (для отладочного оверлея)
+		EnemyRenderController.GetActiveCount() -> number   (для отладочного оверлея;
+			на Low качестве (M7) — только видимые в renderDistance, не все живые)
 ]]
 
 local Players = game:GetService("Players")
@@ -36,6 +37,7 @@ local Net = require(Shared.Net)
 local Packet = require(Shared.Util.Packet)
 local Palette = require(Shared.Config.Palette)
 local Pool = require(Shared.Util.Pool)
+local SettingsController = require(script.Parent.SettingsController)
 local SpatialHash = require(Shared.Util.SpatialHash)
 
 local DEATH_FLASH_TIME = 0.09
@@ -57,8 +59,16 @@ local typeIds: { [number]: number } = {}
 local phases: { [number]: number } = {}
 local parts: { [number]: Part } = {}
 local isAlive: { [number]: boolean } = {}
+-- Виден ли враг сейчас (в пределах renderDistance качества). false = скрыт
+-- прозрачностью и не участвует в BulkMoveTo, но продолжает симулироваться.
+local visible: { [number]: boolean } = {}
 local highWater = 0
 local activeCount = 0
+
+-- Качество отрисовки (M7), выставляется заново на каждый onRunStarted:
+-- смена настройки посреди боя недоступна (LobbyRequest заблокирован в бою).
+local renderDistance = Balance.Quality.High.renderDistance
+local deathFlash = Balance.Quality.High.deathFlash
 
 -- Гаснущие части убитых врагов.
 local fadingParts: { Part } = {}
@@ -83,6 +93,28 @@ local moveCFrames: { CFrame } = {}
 local lastMoveCount = 0
 local resyncIds: { number } = {}
 local resyncPositions: { Vector3 } = {}
+local resyncHealth: { number } = {}
+
+--[[
+	Полоски здоровья над врагами (M7).
+
+	Доля здоровья приходит в пакете ресинхронизации, то есть у врага, которого
+	давно не ресинкали, она слегка устаревшая — для полоски над головой этого
+	достаточно, а второй поток ради неё был бы дороже самой фичи.
+
+	Полоски рисуются НЕ у всех: только у раненых, только вблизи и не больше
+	фиксированного числа сразу. При трёхстах врагах на арене полоска над каждым
+	превратилась бы в сплошную рябь и в честную просадку кадра на телефоне.
+]]
+local health: { [number]: number } = {}
+
+type HealthBar = {
+	gui: BillboardGui,
+	fill: Frame,
+}
+
+local healthBars: { HealthBar } = {}
+local healthBarLimit = Balance.Quality.High.healthBars
 
 local function resetPart(part: Part): ()
 	part.Parent = nil
@@ -111,6 +143,56 @@ local function getPool(): Pool.Pool<Part>
 	return created
 end
 
+--[[
+	Пул полосок здоровья. Создаётся один раз при старте контроллера по потолку
+	High: сменить настройку качества посреди боя нельзя, но между забегами
+	можно, и пересоздавать интерфейс на входе в бой ради этого не хочется.
+]]
+local function buildHealthBars(parent: Instance): ()
+	local screen = Instance.new("ScreenGui")
+	screen.Name = "EnemyHealthBars"
+	screen.ResetOnSpawn = false
+	-- Ниже HUD (200): полоски врагов не должны налезать на счётчики игрока.
+	screen.DisplayOrder = 120
+	screen.Parent = parent
+
+	for index = 1, Balance.Quality.High.healthBars do
+		local gui = Instance.new("BillboardGui")
+		gui.Name = `EnemyHealth{index}`
+		gui.Size = UDim2.fromOffset(38, 5)
+		gui.AlwaysOnTop = false
+		gui.LightInfluence = 0
+		gui.MaxDistance = Balance.Combat.healthBarDistance
+		gui.Enabled = false
+		gui.Parent = screen
+
+		local track = Instance.new("Frame")
+		track.Name = "Track"
+		track.Size = UDim2.fromScale(1, 1)
+		track.BackgroundColor3 = Palette.UI.background
+		track.BackgroundTransparency = 0.25
+		track.BorderSizePixel = 0
+		track.Parent = gui
+
+		local fill = Instance.new("Frame")
+		fill.Name = "Fill"
+		fill.Size = UDim2.fromScale(1, 1)
+		fill.BackgroundColor3 = Palette.UI.danger
+		fill.BorderSizePixel = 0
+		fill.Parent = track
+
+		healthBars[index] = { gui = gui, fill = fill }
+	end
+end
+
+local function hideHealthBars(from: number): ()
+	for index = from, #healthBars do
+		local bar = healthBars[index]
+		bar.gui.Enabled = false
+		bar.gui.Adornee = nil
+	end
+end
+
 local function clearAll(): ()
 	local pool = partPool
 	if pool then
@@ -123,6 +205,9 @@ local function clearAll(): ()
 	table.clear(phases)
 	table.clear(parts)
 	table.clear(isAlive)
+	table.clear(visible)
+	table.clear(health)
+	hideHealthBars(1)
 	table.clear(fadingParts)
 	table.clear(fadingUntil)
 	table.clear(moveParts)
@@ -168,6 +253,10 @@ local function applySpawn(id: number, typeId: number, position: Vector3): ()
 	phases[id] = (id % 32) * 0.4
 	parts[id] = part
 	isAlive[id] = true
+	visible[id] = true
+	-- Целым враг считается до первого ресинка: полоска над невредимым
+	-- не рисуется вовсе, поэтому «пока не знаем» и «цел» здесь одно и то же.
+	health[id] = 1
 
 	if id > highWater then
 		highWater = id
@@ -176,6 +265,8 @@ end
 
 local function applyDespawn(id: number, reason: number): ()
 	isAlive[id] = nil
+	visible[id] = nil
+	health[id] = nil
 
 	local part = parts[id]
 	parts[id] = nil
@@ -183,8 +274,10 @@ local function applyDespawn(id: number, reason: number): ()
 		return
 	end
 
-	if reason == Packet.Reason.Killed then
-		-- Вспышка вместо анимации смерти (раздел 2.1 ТЗ).
+	if reason == Packet.Reason.Killed and deathFlash then
+		-- Вспышка вместо анимации смерти (раздел 2.1 ТЗ). На Low качестве
+		-- пропускается: часть уходит в пул тем же кадром, без лишнего кадра
+		-- жизни на экране.
 		part.Material = Enum.Material.Neon
 		part.Color = Palette.Brand.white
 		fadingCount += 1
@@ -273,19 +366,67 @@ local function simulate(dt: number, playerLocal: Vector3): ()
 	end
 end
 
-local function render(now: number): ()
+local function render(now: number, playerLocal: Vector3): ()
 	local bobSpeed = Balance.Combat.bobSpeed
 	local bobAmplitude = Balance.Combat.bobAmplitude
+	local renderDistanceSquared = renderDistance * renderDistance
+	local barDistanceSquared = Balance.Combat.healthBarDistance * Balance.Combat.healthBarDistance
 	local count = 0
+	local bars = 0
 
 	for id = 1, highWater do
 		if isAlive[id] then
 			local part = parts[id]
 			if part then
-				local def = Enemies.List[typeIds[id]]
 				local position = positions[id]
+				local dx = position.X - playerLocal.X
+				local dz = position.Z - playerLocal.Z
+				local inRange = dx * dx + dz * dz <= renderDistanceSquared
+
+				--[[
+					Дальше renderDistance часть гасится прозрачностью и выходит
+					из BulkMoveTo — это и есть реальная экономия кадра на Low.
+					Позиция при этом продолжает симулироваться каждый тик:
+					расталкивание и попадания способностей не должны зависеть
+					от того, что сейчас видно на экране.
+				]]
+				if not inRange then
+					if visible[id] ~= false then
+						part.Transparency = 1
+						visible[id] = false
+					end
+					continue
+				end
+
+				if visible[id] == false then
+					part.Transparency = 0
+				end
+				visible[id] = true
+
+				local def = Enemies.List[typeIds[id]]
 				local offset = offsets[id]
 				local bob = EnemyMotion.BobOffset(phases[id], now, bobSpeed, bobAmplitude)
+
+				--[[
+					Полоска достаётся раненым вблизи, пока не кончился лимит.
+					Порядок обхода — по id, то есть по старшинству врага, а не
+					по расстоянию: сортировать три сотни врагов каждый кадр ради
+					порядка полосок дороже, чем сама фича.
+				]]
+				local fraction = health[id]
+				if
+					bars < healthBarLimit
+					and fraction ~= nil
+					and fraction < 1
+					and dx * dx + dz * dz <= barDistanceSquared
+				then
+					bars += 1
+					local bar = healthBars[bars]
+					bar.gui.Adornee = part
+					bar.gui.StudsOffsetWorldSpace = Vector3.new(0, def.model.size.Y * 0.5 + 1.2, 0)
+					bar.gui.Enabled = true
+					bar.fill.Size = UDim2.fromScale(math.max(fraction, 0), 1)
+				end
 
 				count += 1
 				moveParts[count] = part
@@ -295,6 +436,10 @@ local function render(now: number): ()
 			end
 		end
 	end
+
+	-- Полоски, не доставшиеся никому в этом кадре, гасим: иначе они остались бы
+	-- висеть на враге, который умер или вышел из радиуса.
+	hideHealthBars(bars + 1)
 
 	-- Хвост от прошлого кадра надо обнулить, иначе BulkMoveTo подвинет лишнее.
 	for index = count + 1, lastMoveCount do
@@ -344,7 +489,7 @@ local function onHeartbeat(deltaTime: number): ()
 	end
 
 	if steps > 0 then
-		render(now)
+		render(now, playerLocal)
 	end
 end
 
@@ -370,6 +515,11 @@ local function onRunStarted(slot: number, seed: number): ()
 	clearAll()
 	origin = Vector3.new(slot * Balance.Arena.spacing, 0, 0)
 	buildObstacles(seed)
+
+	local quality = Balance.Quality[SettingsController.ResolveQuality()]
+	renderDistance = quality.renderDistance
+	deathFlash = quality.deathFlash
+	healthBarLimit = quality.healthBars
 
 	local folder = Instance.new("Folder")
 	folder.Name = "Enemies"
@@ -418,7 +568,7 @@ local function onResync(data: buffer): ()
 		return
 	end
 
-	local count = Packet.ReadResync(data, resyncIds, resyncPositions)
+	local count = Packet.ReadResync(data, resyncIds, resyncPositions, resyncHealth)
 	for index = 1, count do
 		local id = resyncIds[index]
 		if isAlive[id] then
@@ -426,6 +576,9 @@ local function onResync(data: buffer): ()
 			-- Позицию принимаем сразу, а видимую разницу гасим постепенно.
 			offsets[id] = positions[id] - exact
 			positions[id] = exact
+			-- Здоровье едет тем же пакетом: полоска обновляется тогда же,
+			-- когда врага и так поправили по позиции.
+			health[id] = resyncHealth[index]
 		end
 	end
 end
@@ -435,6 +588,8 @@ function EnemyRenderController.GetActiveCount(): number
 end
 
 function EnemyRenderController.Start(): ()
+	buildHealthBars(player:WaitForChild("PlayerGui"))
+
 	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(onRunStarted)
 	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(onRunEnded)
 	Net.GetEvent(Net.Id.EnemyEvents).OnClientEvent:Connect(onEvents)

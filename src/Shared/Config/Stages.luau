@@ -21,6 +21,7 @@
 		Stages.Get(index)                 -> StageDef?
 		Stages.LocationFor(index)         -> (LocationDef?, indexInLocation)
 		Stages.IsLocationFinal(index)     -> boolean
+		Stages.Tutorial()                 -> StageDef
 ]]
 
 local Balance = require(script.Parent.Balance)
@@ -32,20 +33,19 @@ type StageDef = Types.StageDef
 local Stages = {}
 
 --[[
-	Сколько уровней в локации по её номеру (раздел 5.1 ТЗ).
+	Сколько уровней в локации.
 
-	Правило, а не поле в каждой записи: числа заданы один раз, и локация
+	РАСХОЖДЕНИЕ С ТЗ, решение владельца. Раздел 5.1 задаёт 10 уровней в первых
+	пяти локациях, дальше 20, 30 и 40 — итого 500. Владелец решил менять
+	локацию каждые пять уровней, поэтому размер стал одним числом в Balance,
+	а не лесенкой по номеру локации. При двадцати локациях это даст сто
+	уровней, а не пятьсот.
+
+	Правило, а не поле в каждой записи: число задано один раз, и локация
 	не может случайно получить чужой размер из-за копипасты.
 ]]
-local function levelsInLocation(locationIndex: number): number
-	if locationIndex <= 5 then
-		return 10
-	elseif locationIndex <= 10 then
-		return 20
-	elseif locationIndex <= 15 then
-		return 30
-	end
-	return 40
+local function levelsInLocation(): number
+	return Balance.Stages.levelsInLocation
 end
 
 --[[
@@ -54,15 +54,56 @@ end
 
 	palette — ключ таблицы в Config/Palette: визуально локации отличаются
 	палитрой и туманом при нулевой стоимости (раздел 5.1 ТЗ).
+
+	enemies — кто населяет локацию и когда появляется: с какого уровня внутри
+	локации и с какой доли фазы выживания. Это и есть кривая усложнения,
+	и она живёт здесь, а не в расписании волн: волны знают только время,
+	а «большой слизень со второго уровня» — это ещё и номер уровня.
 ]]
 local locations: { LocationDef } = {
+	--[[
+		Лесная поляна: только слизни, и вводятся они постепенно.
+
+		Первый уровень — обычные слизни и ничего больше: это первое, что видит
+		игрок после обучения, и знакомить его сразу с тремя видами незачем.
+		Дальше на каждом уровне прибавляется по виду, а мега-слизень, который
+		разваливается на двух больших, приходит последним.
+	]]
 	{
-		key = "Emberfall",
-		displayName = "Emberfall",
+		key = "ForestGlade",
+		displayName = "Forest Glade",
 		levels = 0, -- проставляется ниже по правилу
-		palette = "Arena",
-		enemyTypes = { "Slime", "Bat", "Ember" },
-		bossKeys = { "Bulwark", "Harrier" },
+		palette = "ForestGlade",
+		enemies = {
+			{ key = "Slime", fromStage = 1, fromFraction = 0 },
+			{ key = "BigSlime", fromStage = 2, fromFraction = 0.5 },
+			{ key = "MegaSlime", fromStage = 4, fromFraction = 0.5 },
+		},
+		bossKeys = { "SlimeKing" },
+	},
+
+	--[[
+		Дремучий лес: все слизни с первого же уровня локации, и к ним гоблины.
+
+		Гоблины появятся вместе со своим кодом (мечник и лучник — следующий
+		кусок работы). Пока локация играется на слизнях: она честно сложнее
+		первой за счёт того, что все три вида идут с самого начала.
+	]]
+	{
+		key = "DeepForest",
+		displayName = "Deep Forest",
+		levels = 0,
+		palette = "DeepForest",
+		enemies = {
+			{ key = "Slime", fromStage = 1, fromFraction = 0 },
+			{ key = "BigSlime", fromStage = 1, fromFraction = 0 },
+			{ key = "MegaSlime", fromStage = 1, fromFraction = 0.35 },
+			-- Мечник — со второй половины первого уровня локации, лучник —
+			-- со второй половины третьего: решение владельца.
+			{ key = "GoblinSwordsman", fromStage = 1, fromFraction = 0.5 },
+			{ key = "GoblinArcher", fromStage = 3, fromFraction = 0.5 },
+		},
+		bossKeys = { "GoblinShaman" },
 	},
 }
 
@@ -77,17 +118,41 @@ local firstLevelOf: { number } = {}
 local total = 0
 
 for index, location in locations do
-	location.levels = levelsInLocation(index)
+	location.levels = levelsInLocation()
 	firstLevelOf[index] = total + 1
 	total += location.levels
 
-	assert(
-		#location.enemyTypes > 0,
-		`[Stages] У локации "{location.key}" пустой список врагов`
-	)
+	assert(#location.enemies > 0, `[Stages] У локации "{location.key}" пустой список врагов`)
 	assert(#location.bossKeys > 0, `[Stages] У локации "{location.key}" нет ни одного босса`)
 
-	table.freeze(location.enemyTypes)
+	--[[
+		Первый уровень локации обязан кем-то населяться с нулевой секунды:
+		враг, введённый позже, оставил бы начало уровня пустым, а игрока —
+		без опыта и без понимания, что происходит.
+	]]
+	local hasOpener = false
+	for _, entry in location.enemies do
+		assert(
+			entry.fromStage >= 1 and entry.fromStage <= location.levels,
+			`[Stages] У локации "{location.key}" враг "{entry.key}" появляется на уровне {entry.fromStage}, `
+				.. `которого в ней нет`
+		)
+		assert(
+			entry.fromFraction >= 0 and entry.fromFraction < 1,
+			`[Stages] У локации "{location.key}" враг "{entry.key}": доля появления вне диапазона [0, 1)`
+		)
+		if entry.fromStage == 1 and entry.fromFraction == 0 then
+			hasOpener = true
+		end
+		table.freeze(entry)
+	end
+
+	assert(
+		hasOpener,
+		`[Stages] У локации "{location.key}" никто не спавнится с начала первого уровня`
+	)
+
+	table.freeze(location.enemies)
 	table.freeze(location.bossKeys)
 	table.freeze(location)
 end
@@ -136,11 +201,37 @@ function Stages.Get(index: number): StageDef?
 
 	--[[
 		Боссовый паттерн меняется каждые bossRotation уровней (раздел 5.1 ТЗ),
-		перебирая список локации по кругу. Так десять уровней дают два разных
-		боссфайта, а не один и тот же десять раз.
+		перебирая список локации по кругу.
+
+		Счёт идёт ВНУТРИ локации, а не по сквозному номеру: иначе первый уровень
+		второй локации продолжал бы чужую нумерацию и брал бы второго босса там,
+		где у локации он один.
 	]]
-	local rotation = math.floor(step / numbers.bossRotation)
+	local rotation = math.floor((indexInLocation - 1) / numbers.bossRotation)
 	local bossKey = location.bossKeys[rotation % #location.bossKeys + 1]
+
+	--[[
+		Кто спавнится на этом уровне и с какой секунды. Доля превращается
+		в секунды здесь, чтобы бой сравнивал два числа, а не пересчитывал
+		проценты на каждом спавне.
+	]]
+	local duration = numbers.baseDuration
+	local enemies: { Types.StageEnemy } = {}
+
+	for _, entry in location.enemies do
+		if entry.fromStage <= indexInLocation then
+			table.insert(enemies, {
+				key = entry.key,
+				-- На уровнях выше того, где враг введён, он идёт с самого начала:
+				-- «со второй половины» относится только к дебютному уровню.
+				fromSeconds = if entry.fromStage == indexInLocation then entry.fromFraction * duration else 0,
+			})
+		end
+	end
+
+	table.sort(enemies, function(a: Types.StageEnemy, b: Types.StageEnemy): boolean
+		return a.fromSeconds < b.fromSeconds
+	end)
 
 	return {
 		index = index,
@@ -155,13 +246,68 @@ function Stages.Get(index: number): StageDef?
 		-- Скорость зажата потолком: быстрые враги на автобое читаются
 		-- не как сложность, а как нечестность.
 		enemySpeedMult = math.min(numbers.enemySpeedGrowth ^ step, numbers.enemySpeedCap),
-		enemyTypes = location.enemyTypes,
+		enemies = enemies,
 
 		bossKey = bossKey,
 		bossHealth = math.floor(numbers.bossHealthBase * numbers.bossHealthGrowth ^ step + 0.5),
 
 		essence = math.floor(numbers.essenceBase * numbers.essenceGrowth ^ step + 0.5),
 		xp = math.floor(numbers.xpBase * numbers.xpGrowth ^ step + 0.5),
+	}
+end
+
+--[[
+	Обучающий уровень (M7, раздел 4 ТЗ).
+
+	Собирается из первого сюжетного уровня, ослабленного множителями
+	Balance.Tutorial: так он остаётся тем же боем с теми же врагами и тем же
+	боссом, что и настоящая игра, — а туториал, показывающий механики,
+	которых потом не будет, не учит ничему.
+
+	index = 0 и в сюжетной нумерации не участвует: Get(0) по-прежнему nil,
+	CanPlay ноль не пропускает, storyStage не двигается. Ноль здесь нужен
+	только затем, чтобы у StageDef было чем заполнить обязательное поле,
+	и он же — признак «это не сюжетный уровень» для всех, кто получит
+	этот StageDef на руки.
+]]
+function Stages.Tutorial(): StageDef
+	local first = Stages.Get(1)
+	assert(
+		first,
+		"[Stages] Нет первого уровня — обучающий уровень собирать не из чего"
+	)
+
+	local numbers = Balance.Tutorial
+
+	return {
+		index = 0,
+		location = first.location,
+		indexInLocation = 0,
+		isLocationFinal = false,
+
+		duration = numbers.duration,
+
+		enemyHealthMult = first.enemyHealthMult * numbers.enemyHealthMult,
+		enemyDamageMult = first.enemyDamageMult * numbers.enemyDamageMult,
+		enemySpeedMult = first.enemySpeedMult * numbers.enemySpeedMult,
+		--[[
+			Тот же набор, что у первого уровня локации: обучение показывает
+			ту игру, в которую игрок будет играть, а не облегчённую версию
+			с другими врагами.
+		]]
+		enemies = first.enemies,
+
+		bossKey = first.bossKey,
+		bossHealth = math.floor(first.bossHealth * numbers.bossHealthMult + 0.5),
+
+		--[[
+			Награда обучающего уровня не отсюда: она одноразовая, выражена
+			через цену яйца и остаток опыта до уровня, и живёт в Config/Tutorial.
+			Здесь нули, чтобы обычный путь начисления по StageDef ничего
+			не выплатил, если однажды забудет про режим.
+		]]
+		essence = 0,
+		xp = 0,
 	}
 end
 

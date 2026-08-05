@@ -22,7 +22,13 @@
 
 	Ресинхронизация (UnreliableRemoteEvent, каждый тик по кругу):
 		u16 count
-		count x { u16 id, f32 x, f32 z }
+		count x { u16 id, f32 x, f32 z, u8 health }
+
+	health — доля здоровья, 0..255. Байт, а не число: полоска над врагом
+	не требует точности, а лишние четыре байта на врага в потоке, который идёт
+	каждый тик, требуют трафика. Едет в этом же пакете, а не в своём:
+	отдельный поток здоровья пришлось бы синхронизировать с этим по порядку,
+	а порядок пакетов боя — та вещь, на которой уже обжигались (см. выше).
 ]]
 
 local Packet = {}
@@ -39,7 +45,7 @@ Packet.Reason = table.freeze({
 
 local SPAWN_SIZE = 1 + 2 + 1 + 4 + 4
 local DESPAWN_SIZE = 1 + 2 + 1
-local RESYNC_SIZE = 2 + 4 + 4
+local RESYNC_SIZE = 2 + 4 + 4 + 1
 
 export type Event = {
 	kind: number,
@@ -119,7 +125,18 @@ function Packet.ReadEvents(data: buffer): { Event }
 	return events
 end
 
-function Packet.WriteResync(ids: { number }, positions: { Vector3 }, count: number): buffer
+--[[
+	hp и maxHp — плоские массивы сервера по id врага, а не готовые доли:
+	считать долю здесь дешевле, чем собирать ради этого третью таблицу
+	каждый тик.
+]]
+function Packet.WriteResync(
+	ids: { number },
+	positions: { Vector3 },
+	hp: { number },
+	maxHp: { number },
+	count: number
+): buffer
 	local data = buffer.create(2 + count * RESYNC_SIZE)
 	buffer.writeu16(data, 0, count)
 
@@ -130,6 +147,11 @@ function Packet.WriteResync(ids: { number }, positions: { Vector3 }, count: numb
 		buffer.writeu16(data, offset, id)
 		buffer.writef32(data, offset + 2, position.X)
 		buffer.writef32(data, offset + 6, position.Z)
+
+		local maximum = maxHp[id] or 0
+		local fraction = if maximum > 0 then math.clamp(hp[id] / maximum, 0, 1) else 1
+		buffer.writeu8(data, offset + 10, math.floor(fraction * 255 + 0.5))
+
 		offset += RESYNC_SIZE
 	end
 
@@ -140,13 +162,14 @@ end
 	Читает ресинк в переданные массивы, чтобы клиент не аллоцировал каждый тик.
 	Возвращает количество записей.
 ]]
-function Packet.ReadResync(data: buffer, outIds: { number }, outPositions: { Vector3 }): number
+function Packet.ReadResync(data: buffer, outIds: { number }, outPositions: { Vector3 }, outHealth: { number }): number
 	local count = buffer.readu16(data, 0)
 	local offset = 2
 
 	for index = 1, count do
 		outIds[index] = buffer.readu16(data, offset)
 		outPositions[index] = Vector3.new(buffer.readf32(data, offset + 2), 0, buffer.readf32(data, offset + 6))
+		outHealth[index] = buffer.readu8(data, offset + 10) / 255
 		offset += RESYNC_SIZE
 	end
 
