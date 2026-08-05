@@ -12,6 +12,8 @@
 	Вызовы через точку, как у остальных утилит проекта.
 ]]
 
+local Workspace = game:GetService("Workspace")
+
 local Palette = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared").Config.Palette)
 
 local UiKit = {}
@@ -19,6 +21,60 @@ local UiKit = {}
 UiKit.ButtonHeight = 48 -- не меньше 44 пикселей
 UiKit.RowHeight = 64
 UiKit.Corner = 10
+
+--[[
+	Автомасштаб окна по вьюпорту (раздел 2 ТЗ, M7). Все панели верстались на
+	широком экране, и на телефоне (300-450 pt в портретной ориентации) строки
+	с фиксированными смещениями (UiKit.Row, ButtonHeight) начинают перекрывать
+	друг друга раньше, чем помогает одна лишь UDim2.fromScale у панели.
+
+	Никогда не увеличивает UI выше единицы — на широком десктопе фиксированные
+	48px кнопки и так читаются нормально, расти там некуда и незачем.
+	Не опускается ниже MIN_SCALE, иначе текст на самом маленьком телефоне
+	стал бы нечитаемым быстрее, чем помогло бы место, которое он освободил.
+]]
+local REFERENCE_WIDTH = 1280
+local REFERENCE_HEIGHT = 800
+
+--[[
+	Пол масштаба. ButtonHeight = 48 — минимальный тач-таргет проекта (44px
+	с запасом), и 0.92 — это ровно тот пол, ниже которого масштаб опустил бы
+	кнопку под эти 44px. Читаемость текста на самом узком телефоне здесь
+	приносится в жертву тач-таргету, а не наоборот: промахнуться пальцем хуже,
+	чем прищуриться.
+]]
+local MIN_SCALE = 0.92
+local MAX_SCALE = 1
+
+local function computeScale(): number
+	local camera = Workspace.CurrentCamera
+	local viewport = if camera then camera.ViewportSize else Vector2.new(REFERENCE_WIDTH, REFERENCE_HEIGHT)
+	local factor = math.min(viewport.X / REFERENCE_WIDTH, viewport.Y / REFERENCE_HEIGHT)
+	return math.clamp(factor, MIN_SCALE, MAX_SCALE)
+end
+
+-- Следит и за сменой размера окна, и за подменой самой камеры (на случай,
+-- если что-то в проекте когда-нибудь её пересоздаст).
+local function watchViewport(uiScale: UIScale): ()
+	local viewportConnection: RBXScriptConnection? = nil
+
+	local function apply()
+		uiScale.Scale = computeScale()
+	end
+
+	local function hook()
+		local existing = viewportConnection
+		if existing then
+			existing:Disconnect()
+		end
+		local camera = Workspace.CurrentCamera
+		viewportConnection = if camera then camera:GetPropertyChangedSignal("ViewportSize"):Connect(apply) else nil
+		apply()
+	end
+
+	hook()
+	Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(hook)
+end
 
 --[[
 	Скругление. Существующий UICorner переиспользуется, а не добавляется второй:
@@ -81,6 +137,20 @@ function UiKit.Button(parent: Instance, name: string, text: string, color: Color
 	button.Size = UDim2.fromOffset(120, UiKit.ButtonHeight)
 	button.Parent = parent
 	UiKit.Corners(button, 8)
+
+	--[[
+		Звук клика централизован здесь: у проекта девять с лишним панелей,
+		и заводить его в каждой по отдельности значило бы девять раз забыть
+		один клик. require ленивый (внутри обработчика, а не в шапке модуля):
+		SoundController — Controller, а не Util, и на момент требования этого
+		модуля из панели он может быть ещё не заскроен загрузчиком; к моменту
+		первого клика Start уже отработал у всех.
+	]]
+	button.Activated:Connect(function()
+		local SoundController = require(script.Parent.Parent.Controllers.SoundController)
+		SoundController.PlaySfx("ButtonClick")
+	end)
+
 	return button
 end
 
@@ -163,6 +233,10 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	panel.Position = UDim2.fromScale(0.5, 0.5)
 	panel.Size = UDim2.fromScale(0.88, 0.82)
 	UiKit.Corners(panel, 14)
+
+	local uiScale = Instance.new("UIScale")
+	uiScale.Parent = panel
+	watchViewport(uiScale)
 
 	local header = UiKit.Frame(panel, "Header")
 	header.Size = UDim2.new(1, -24, 0, 56)

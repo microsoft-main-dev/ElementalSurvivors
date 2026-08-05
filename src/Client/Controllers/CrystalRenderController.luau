@@ -24,6 +24,7 @@ local Net = require(Shared.Net)
 local Packet = require(Shared.Util.Packet)
 local Palette = require(Shared.Config.Palette)
 local Pool = require(Shared.Util.Pool)
+local SettingsController = require(script.Parent.SettingsController)
 
 local PREWARM = 120
 
@@ -40,8 +41,12 @@ local magnetRadius = Balance.Pickup.magnetRadius
 local positions: { [number]: Vector3 } = {}
 local parts: { [number]: Part } = {}
 local isAlive: { [number]: boolean } = {}
+-- Как у EnemyRenderController: скрытые дальше renderDistance не идут
+-- в BulkMoveTo, а полёт к игроку всё равно считается для всех (раздел 2.1 ТЗ, M7).
+local visible: { [number]: boolean } = {}
 local highWater = 0
 local activeCount = 0
+local renderDistance = Balance.Quality.High.renderDistance
 
 local container: Folder? = nil
 local partPool: Pool.Pool<Part>? = nil
@@ -89,6 +94,7 @@ local function clearAll(): ()
 	table.clear(positions)
 	table.clear(parts)
 	table.clear(isAlive)
+	table.clear(visible)
 	table.clear(moveParts)
 	table.clear(moveCFrames)
 
@@ -111,6 +117,7 @@ local function applySpawn(id: number, position: Vector3): ()
 	positions[id] = position
 	parts[id] = part
 	isAlive[id] = true
+	visible[id] = true
 
 	if id > highWater then
 		highWater = id
@@ -150,6 +157,7 @@ local function onHeartbeat(deltaTime: number): ()
 	end
 
 	local magnetRadiusSquared = magnetRadius ^ 2
+	local renderDistanceSquared = renderDistance * renderDistance
 	local step = Balance.Pickup.magnetSpeed * deltaTime
 	local height = Balance.Pickup.height
 	local count = 0
@@ -170,9 +178,18 @@ local function onHeartbeat(deltaTime: number): ()
 					positions[id] = position
 				end
 
-				count += 1
-				moveParts[count] = part
-				moveCFrames[count] = CFrame.new(origin + Vector3.new(position.X, height, position.Z))
+				if distanceSquared <= renderDistanceSquared then
+					if visible[id] == false then
+						part.Transparency = 0
+					end
+					visible[id] = true
+					count += 1
+					moveParts[count] = part
+					moveCFrames[count] = CFrame.new(origin + Vector3.new(position.X, height, position.Z))
+				elseif visible[id] ~= false then
+					part.Transparency = 1
+					visible[id] = false
+				end
 			end
 		end
 	end
@@ -203,6 +220,7 @@ function CrystalRenderController.Start(): ()
 		clearAll()
 		origin = Vector3.new(slot * Balance.Arena.spacing, 0, 0)
 		magnetRadius = radius or Balance.Pickup.magnetRadius
+		renderDistance = Balance.Quality[SettingsController.ResolveQuality()].renderDistance
 
 		local folder = Instance.new("Folder")
 		folder.Name = "Crystals"
