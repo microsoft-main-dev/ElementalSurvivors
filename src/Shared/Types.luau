@@ -602,10 +602,18 @@ export type TalentEffect = {
 	perPoint: number,
 }
 
+--[[
+	Калибр узла. Определяет и вес эффекта, и размер кружка на панели — это одно
+	и то же решение, и хранить его двумя полями значило бы однажды нарисовать
+	точку размером с ключевой узел.
+]]
+export type TalentNodeKind = "Minor" | "Notable" | "Keystone"
+
 export type TalentNode = {
 	id: string,
 	displayName: string,
 	element: Element?, -- nil у общих узлов
+	kind: TalentNodeKind,
 	position: Vector2, -- в условных единицах дерева, масштаб задаёт панель
 	connections: { string }, -- связи двусторонние, обратные достраиваются при загрузке
 	maxPoints: number,

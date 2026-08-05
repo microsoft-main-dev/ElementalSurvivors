@@ -265,8 +265,38 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	panel.Active = true
 	UiKit.Corners(panel, 14)
 
-	backdrop.Activated:Connect(function()
-		screen.Enabled = false
+	--[[
+		Закрытие по клику мимо окна — именно КЛИКОМ, а не отпусканием кнопки.
+
+		Нажатие и отпускание должны прийти на подложку, и палец между ними
+		не должен уехать. Иначе перетаскивание, начатое внутри окна и
+		законченное за его краем, закрывало бы окно: ровно так и оказалось
+		невозможно возить дерево талантов мышью.
+	]]
+	local CLICK_SLOP = 8 -- пикселей: дрожание руки это ещё клик, а не перетаскивание
+	local pressedAt: Vector2? = nil
+
+	local function isPointer(input: InputObject): boolean
+		return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	backdrop.InputBegan:Connect(function(input: InputObject)
+		if isPointer(input) then
+			pressedAt = Vector2.new(input.Position.X, input.Position.Y)
+		end
+	end)
+
+	backdrop.InputEnded:Connect(function(input: InputObject)
+		if not isPointer(input) then
+			return
+		end
+
+		local start = pressedAt
+		pressedAt = nil
+
+		if start and (Vector2.new(input.Position.X, input.Position.Y) - start).Magnitude <= CLICK_SLOP then
+			screen.Enabled = false
+		end
 	end)
 
 	local uiScale = Instance.new("UIScale")

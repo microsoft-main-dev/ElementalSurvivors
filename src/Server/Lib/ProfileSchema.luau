@@ -32,7 +32,7 @@ type ProfileData = Types.ProfileData
 
 local ProfileSchema = {}
 
-ProfileSchema.Version = 2
+ProfileSchema.Version = 3
 
 --[[
 	Имя DataStore. Менять его — значит обнулить всем игрокам прогресс, поэтому
@@ -164,6 +164,9 @@ ProfileSchema.Template = template
 
 	Версия 2 разворачивает счётчик дубликатов в отдельных питомцев: эволюция
 	ест целых питомцев, а не число.
+
+	Версия 3 возвращает очки талантов: дерево пересобрано целиком, и старых
+	id в нём не осталось.
 ]]
 local Migrations: { (data: ProfileData) -> () } = {
 	--[[
@@ -204,6 +207,27 @@ local Migrations: { (data: ProfileData) -> () } = {
 		for _, pet in extra do
 			table.insert(data.pets, pet)
 		end
+	end,
+
+	--[[
+		2 -> 3: дерево талантов пересобрано, вложенные очки возвращаются.
+
+		Ни одного прежнего id в новом дереве нет, а TalentService молча
+		пропускает неизвестные узлы — без этой миграции вложенное просто
+		исчезло бы вместе с очками, за которые его покупали.
+
+		Возвращается ровно столько, сколько было вложено: считать «сколько
+		очков положено по уровню» здесь нельзя — часть их может быть
+		не потрачена и уже лежать в talentPoints.
+	]]
+	[2] = function(data: ProfileData)
+		local refunded = 0
+		for _, points in data.talents do
+			refunded += points
+		end
+
+		data.talents = {}
+		data.talentPoints += refunded
 	end,
 }
 
