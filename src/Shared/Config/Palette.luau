@@ -67,6 +67,51 @@ local Palette = {
 		exit = Color3.fromHex("#E2603A"),
 	}),
 
+	--[[
+		Палитры локаций. Ключ берётся из LocationDef.palette, и локация
+		без своей записи откатывается на Arena выше — новая локация
+		не должна ронять бой из-за забытого цвета.
+
+		Обе лесные, но по-разному: поляна светлее и теплее, дремучий лес
+		темнее и холоднее, с плотным туманом. Разница должна читаться
+		мгновенно, иначе смена локации не ощущается вовсе.
+	]]
+	Arenas = table.freeze({
+		ForestGlade = table.freeze({
+			floor = Color3.fromHex("#33502F"),
+			floorAccent = Color3.fromHex("#3F6238"),
+			decor = Color3.fromHex("#4A6B3C"),
+			decorAccent = Color3.fromHex("#8FD3AC"),
+			fog = Color3.fromHex("#0E1A10"),
+			exit = Color3.fromHex("#E2603A"),
+		}),
+		DeepForest = table.freeze({
+			floor = Color3.fromHex("#1E2E28"),
+			floorAccent = Color3.fromHex("#26382F"),
+			decor = Color3.fromHex("#2A3D33"),
+			decorAccent = Color3.fromHex("#4FA97C"),
+			fog = Color3.fromHex("#060B08"),
+			exit = Color3.fromHex("#E2603A"),
+		}),
+	}),
+
+	--[[
+		Секторы колеса фортуны, от дешёвого приза к дорогому.
+
+		Список отдельный, а не «цвет по редкости»: у призов колеса редкости нет,
+		есть порядок. Каждый цвет обязан быть виден на тёмной панели — первый
+		вариант красил дешёвые секторы цветом самой панели, и половина колеса
+		просто не рисовалась.
+	]]
+	Wheel = table.freeze({
+		Color3.fromHex("#2F6B4F"),
+		Color3.fromHex("#3E8C6A"),
+		Color3.fromHex("#4FA97C"),
+		Color3.fromHex("#5FC8E8"),
+		Color3.fromHex("#E8CE4B"),
+		Color3.fromHex("#E2603A"),
+	}),
+
 	-- Интерфейс
 	UI = table.freeze({
 		background = Color3.fromHex("#122019"),
@@ -75,6 +120,9 @@ local Palette = {
 		subtext = Color3.fromHex("#8FD3AC"),
 		accent = Color3.fromHex("#4FA97C"),
 		danger = Color3.fromHex("#E2603A"),
+		-- Предупреждение без урона: телеграф призыва (там появятся враги,
+		-- но сам круг не бьёт). Красный там был бы обманом.
+		warning = Color3.fromHex("#E8CE4B"),
 	}),
 }
 

@@ -35,6 +35,7 @@ local OfflinePanel = require(script.Parent.Parent.UI.OfflinePanel)
 local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
 local PetsPanel = require(script.Parent.Parent.UI.PetsPanel)
+local SettingsPanel = require(script.Parent.Parent.UI.SettingsPanel)
 local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
 local StagePanel = require(script.Parent.Parent.UI.StagePanel)
 local StorePanel = require(script.Parent.Parent.UI.StorePanel)
@@ -60,6 +61,7 @@ local stagePanel: StagePanel.Panel? = nil
 local itemsPanel: ItemsPanel.Panel? = nil
 local dailyPanel: DailyPanel.Panel? = nil
 local storePanel: StorePanel.Panel? = nil
+local settingsPanel: SettingsPanel.Panel? = nil
 
 local profileView: Types.ProfileView? = nil
 local petsView: Types.PetsView? = nil
@@ -72,6 +74,26 @@ local leaderboard: { Types.LeaderboardEntry } = {}
 local petModel: BasePart? = nil
 local petSpin = 0
 local inRun = false
+
+--[[
+	Обучение (M7). Пока тур идёт, открывается только та панель, на которую он
+	показывает, а остальные кнопки гасятся. Это подсказка, а не защита: за
+	туториал ничего не начисляется, и обходить здесь нечего — потому проверка
+	и живёт на клиенте.
+
+	Кнопки складываются по именам, чтобы тур мог зажечь нужную, не зная,
+	в каком порядке их построил buildBar.
+]]
+local barButtons: { [string]: TextButton } = {}
+local tutorialFocus: string? = nil
+local panelListener: ((name: string) -> ())? = nil
+
+--[[
+	Обучающий уровень ещё не пройден: панель у портала показывает только его.
+	Состояние приходит тем же TutorialView, что и контроллеру обучения —
+	подписаться на готовый пуш дешевле, чем спрашивать соседний контроллер.
+]]
+local tutorialPending = false
 
 local function send(action: string, target: string?, extra: unknown): ()
 	Net.GetEvent(Net.Id.LobbyRequest):FireServer(action, target, extra)
@@ -109,7 +131,9 @@ local function refreshPanels(): ()
 
 	local eggs = eggsPanel
 	if eggs then
-		eggs.Refresh(essence, prisms)
+		-- Коллекция нужна панели, чтобы показать неполученных питомцев
+		-- силуэтами: что уже есть, знает только этот срез.
+		eggs.Refresh(essence, prisms, petsView)
 	end
 
 	local shop = shopPanel
@@ -125,7 +149,7 @@ local function refreshPanels(): ()
 
 	local stage = stagePanel
 	if stage then
-		stage.Refresh(if profileView then profileView.storyStage else 1)
+		stage.Refresh(if profileView then profileView.storyStage else 1, tutorialPending)
 	end
 
 	local items = itemsPanel
@@ -141,6 +165,11 @@ local function refreshPanels(): ()
 	local store = storePanel
 	if store then
 		store.Refresh(storeView)
+	end
+
+	local settings = settingsPanel
+	if settings and profileView then
+		settings.Refresh(profileView.settings)
 	end
 end
 
@@ -181,6 +210,10 @@ local function closeAll(): ()
 	if store then
 		store.Close()
 	end
+	local settings = settingsPanel
+	if settings then
+		settings.Close()
+	end
 end
 
 --[[
@@ -189,6 +222,16 @@ end
 	разные окна.
 ]]
 local function openPanel(name: string, target: string?): ()
+	--[[
+		Фильтр тура стоит здесь, а не в обработчике кнопки: панель открывается
+		ещё и промптом у объекта лобби, и «заблокировано только с кнопки»
+		означало бы, что игрок обходит шаг обучения ногами.
+	]]
+	local focus = tutorialFocus
+	if focus and name ~= focus then
+		return
+	end
+
 	closeAll()
 
 	if name == "Pets" then
@@ -226,6 +269,11 @@ local function openPanel(name: string, target: string?): ()
 		if store then
 			store.Open()
 		end
+	elseif name == "Settings" then
+		local settings = settingsPanel
+		if settings then
+			settings.Open()
+		end
 	elseif name == "Quests" or name == "Wheel" or name == "Leaderboard" then
 		-- Три объекта лобби делят одну панель: у них одинаковая форма,
 		-- а открывается тот раздел, к которому подошёл игрок.
@@ -234,6 +282,35 @@ local function openPanel(name: string, target: string?): ()
 			daily.Open(name)
 		end
 	end
+
+	local listener = panelListener
+	if listener then
+		listener(name)
+	end
+end
+
+--[[
+	Шаг тура обучения: имя панели, которую сейчас ждут от игрока, или nil —
+	«тур закончен, лобби снова целиком его».
+]]
+function LobbyController.SetTutorialFocus(name: string?): ()
+	tutorialFocus = name
+
+	for buttonName, button in barButtons do
+		local allowed = name == nil or buttonName == name
+		UiKit.SetEnabled(button, allowed)
+
+		local stroke = button:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Enabled = name ~= nil and buttonName == name
+		end
+	end
+end
+
+-- Кто-то открыл панель. Слушатель один: обучение — единственное, кому это
+-- интересно, а список подписчиков ради одного подписчика не заводят.
+function LobbyController.SetPanelListener(fn: (name: string) -> ()): ()
+	panelListener = fn
 end
 
 --[[
@@ -323,9 +400,9 @@ local function buildBar(): ()
 	local holder = UiKit.Frame(gui, "Holder")
 	holder.AnchorPoint = Vector2.new(0.5, 1)
 	holder.Position = UDim2.new(0.5, 0, 1, -14)
-	-- Кнопок стало семь, и на телефоне в ряд они не влезут: список
-	-- переносится на вторую строку, поэтому у держателя двойная высота.
-	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 4 + BUTTON_GAP * 3, UiKit.ButtonHeight * 2 + BUTTON_GAP)
+	-- Девять кнопок по четыре в ряд — три ряда, и на телефоне они не влезут
+	-- в один, поэтому у держателя фиксированная тройная высота.
+	holder.Size = UDim2.fromOffset(BUTTON_WIDTH * 4 + BUTTON_GAP * 3, UiKit.ButtonHeight * 3 + BUTTON_GAP * 2)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
@@ -349,6 +426,7 @@ local function buildBar(): ()
 		{ name = "Talents", text = "Talents" },
 		{ name = "Quests", text = "Daily" },
 		{ name = "Store", text = "Store" },
+		{ name = "Settings", text = "Settings" },
 	}
 
 	for order, entry in buttons do
@@ -358,6 +436,16 @@ local function buildBar(): ()
 		button.Activated:Connect(function()
 			openPanel(entry.name, nil)
 		end)
+
+		-- Контур для подсветки шага обучения. Создаётся сразу и выключенным:
+		-- иначе тур создавал бы объекты в чужом интерфейсе на ходу.
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Palette.UI.accent
+		stroke.Thickness = 3
+		stroke.Enabled = false
+		stroke.Parent = button
+
+		barButtons[entry.name] = button
 	end
 end
 
@@ -393,6 +481,7 @@ function LobbyController.Start(): ()
 	dailyPanel = DailyPanel.Build(playerGui, send)
 	-- Витрине send не нужен: покупка идёт мимо сервера, прямо в Roblox.
 	storePanel = StorePanel.Build(playerGui)
+	settingsPanel = SettingsPanel.Build(playerGui, send)
 
 	--[[
 		Промпты объектов лобби. Какое окно открыть, написано в атрибуте самого
@@ -435,6 +524,11 @@ function LobbyController.Start(): ()
 
 	Net.GetEvent(Net.Id.QuestsView).OnClientEvent:Connect(function(view: Types.QuestsView)
 		questsView = view
+		refreshPanels()
+	end)
+
+	Net.GetEvent(Net.Id.TutorialView).OnClientEvent:Connect(function(view: Types.TutorialView)
+		tutorialPending = view.needsRun
 		refreshPanels()
 	end)
 

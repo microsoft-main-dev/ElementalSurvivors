@@ -20,6 +20,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
+local Stages = require(Shared.Config.Stages)
 
 local ArenaController = {}
 
@@ -29,6 +30,7 @@ type LightingSnapshot = {
 	fogEnd: number,
 	ambient: Color3,
 	outdoorAmbient: Color3,
+	clockTime: number,
 }
 
 local lobbySnapshot: LightingSnapshot? = nil
@@ -40,6 +42,7 @@ local function snapshotLighting(): LightingSnapshot
 		fogEnd = Lighting.FogEnd,
 		ambient = Lighting.Ambient,
 		outdoorAmbient = Lighting.OutdoorAmbient,
+		clockTime = Lighting.ClockTime,
 	}
 end
 
@@ -49,23 +52,49 @@ local function restoreLighting(snapshot: LightingSnapshot): ()
 	Lighting.FogEnd = snapshot.fogEnd
 	Lighting.Ambient = snapshot.ambient
 	Lighting.OutdoorAmbient = snapshot.outdoorAmbient
+	Lighting.ClockTime = snapshot.clockTime
 end
 
-local function applyArenaLighting(): ()
-	Lighting.FogColor = Palette.Arena.fog
+--[[
+	Палитра локации, в которой идёт забег.
+
+	Номер уровня приходит вместе со стартом, а сам уровень собирается той же
+	функцией, что и на сервере — Stages.Get. Локация без своей записи
+	откатывается на общую палитру: забытый цвет не должен ронять бой.
+]]
+local function paletteFor(stageIndex: number): typeof(Palette.Arena)
+	local stage = if stageIndex > 0 then Stages.Get(stageIndex) else nil
+	local named = if stage then Palette.Arenas[stage.location.palette] else nil
+	return named or Palette.Arena
+end
+
+local function applyArenaLighting(palette: typeof(Palette.Arena)): ()
+	Lighting.FogColor = palette.fog
 	Lighting.FogStart = Balance.Arena.fogStart
 	Lighting.FogEnd = Balance.Arena.fogEnd
-	Lighting.Ambient = Palette.Arena.floor
-	Lighting.OutdoorAmbient = Palette.Arena.floor
+	Lighting.Ambient = palette.floor
+	Lighting.OutdoorAmbient = palette.floor
+
+	--[[
+		Ночь на арене (M7). Это ответ на висевший с M1 косметический вопрос:
+		небо оставалось дневным и голубым, а Sky с пустыми текстурами Roblox
+		подменяет своим — то есть без ассетов заменить облака было нечем.
+
+		Ночью подменять нечего: стандартное небо на этом времени суток и есть
+		звёзды. Лобби при этом остаётся дневным, потому что Lighting здесь
+		меняется локально и только на время забега.
+	]]
+	Lighting.ClockTime = Balance.Arena.clockTime
 end
 
 function ArenaController.Start(): ()
-	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(function()
-		if not lobbySnapshot then
-			lobbySnapshot = snapshotLighting()
-		end
-		applyArenaLighting()
-	end)
+	Net.GetEvent(Net.Id.RunStarted).OnClientEvent
+		:Connect(function(_slot: number, _seed: number, _magnet: number, _mode: string, stageIndex: number)
+			if not lobbySnapshot then
+				lobbySnapshot = snapshotLighting()
+			end
+			applyArenaLighting(paletteFor(stageIndex))
+		end)
 
 	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(function()
 		local snapshot = lobbySnapshot

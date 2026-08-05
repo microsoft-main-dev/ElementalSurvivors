@@ -13,6 +13,12 @@
 	Бесконечный режим доступен сразу (раздел 4 ТЗ), но подписан как невыгодный
 	на низких уровнях. Это мягкое направление, а не блокировка.
 
+	Кнопка "Boss Fight (test)" видна только в Studio (M7): текущий открытый
+	уровень входит сразу с максимальным билдом и без фазы выживания — чтобы
+	проверять баланс боссов, не пережидая забег заново на каждую правку.
+	CombatService всё равно не пустит её мимо Studio, но показывать мёртвую
+	кнопку живому игроку незачем.
+
 	Публичный API:
 		StagePanel.Build(parent, send) -> Panel
 		panel.Open()
@@ -21,8 +27,10 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Balance = require(Shared.Config.Balance)
 local Palette = require(Shared.Config.Palette)
 local Stages = require(Shared.Config.Stages)
 local UiKit = require(script.Parent.UiKit)
@@ -30,7 +38,7 @@ local UiKit = require(script.Parent.UiKit)
 export type Panel = {
 	Open: () -> (),
 	Close: () -> (),
-	Refresh: (unlocked: number) -> (),
+	Refresh: (unlocked: number, tutorialPending: boolean) -> (),
 }
 
 local StagePanel = {}
@@ -59,14 +67,81 @@ function StagePanel.Build(parent: Instance, send: (action: string, target: strin
 	endlessHint.Position = UDim2.fromOffset(4, UiKit.ButtonHeight + 12)
 	endlessHint.Size = UDim2.new(1, -8, 0, 18)
 
+	-- Studio-only тестовая кнопка — резервируем место под неё только там же.
+	local isStudio = RunService:IsStudio()
+	local listTop = UiKit.ButtonHeight + 36
+
+	--[[
+		По кнопке на локацию: у каждой свой босс, и добраться до второго
+		по-настоящему — это полтора часа игры. Кнопка ведёт на первый уровень
+		своей локации и сразу выводит босса.
+
+		Собираются по списку локаций, а не выписаны руками: третья локация
+		получит свою кнопку сама.
+	]]
+	if isStudio then
+		local width = 1 / #Stages.Locations
+
+		for index, location in Stages.Locations do
+			local first = (index - 1) * Stages.Locations[1].levels + 1
+			local button =
+				UiKit.Button(window.content, `BossFight{index}`, `Boss: {location.displayName}`, Palette.UI.danger)
+			button.Position = UDim2.new((index - 1) * width, 4, 0, listTop)
+			button.Size = UDim2.new(width, -8, 0, UiKit.ButtonHeight)
+			button.TextSize = 14
+			button.Activated:Connect(function()
+				send("DebugBossFight", nil, first)
+			end)
+		end
+
+		listTop += UiKit.ButtonHeight + 8
+	end
+
 	local list = UiKit.Scroll(window.content, "Stages")
-	list.Position = UDim2.fromOffset(0, UiKit.ButtonHeight + 36)
-	list.Size = UDim2.new(1, 0, 1, -UiKit.ButtonHeight - 36)
+	list.Position = UDim2.fromOffset(0, listTop)
+	list.Size = UDim2.new(1, 0, 1, -listTop)
 
 	local unlockedStage = 1
+	local tutorialPending = false
+
+	--[[
+		Пока обучающий уровень не пройден, он единственный доступный
+		(M7, раздел 4 ТЗ). Список сюжетных уровней и бесконечный режим при
+		этом не гасятся, а не показываются вовсе: погашенные строки на пятьсот
+		уровней — это не «пока нельзя», а стена, за которой не видно кнопки,
+		которую от игрока ждут.
+
+		Отказывает всё равно сервер (CombatService): здесь только вид.
+	]]
+	local function renderTutorial(): ()
+		window.subtitle.Text = "Tutorial — learn the basics, then the story opens up"
+
+		local row = UiKit.Row(list, 1, Palette.UI.accent)
+		row.badge.Text = "!"
+		row.title.Text = "Tutorial stage"
+		row.subtitle.Text = string.format(
+			"%s  ·  weakened enemies  ·  weakened boss  ·  pays for your first egg",
+			formatDuration(Balance.Tutorial.duration)
+		)
+
+		local play = UiKit.Button(row.actions, "Play", "Play")
+		play.LayoutOrder = 1
+		play.Size = UDim2.fromOffset(104, UiKit.ButtonHeight)
+		play.Activated:Connect(function()
+			send("EnterRun", "Tutorial", 0)
+		end)
+	end
 
 	local function render(): ()
 		UiKit.ClearList(list)
+
+		endless.Visible = not tutorialPending
+		endlessHint.Visible = not tutorialPending
+
+		if tutorialPending then
+			renderTutorial()
+			return
+		end
 
 		window.subtitle.Text =
 			`Story progress: stage {math.min(unlockedStage, Stages.TotalLevels)} of {Stages.TotalLevels}`
@@ -123,8 +198,9 @@ function StagePanel.Build(parent: Instance, send: (action: string, target: strin
 			window.screen.Enabled = false
 		end,
 
-		Refresh = function(unlocked: number)
+		Refresh = function(unlocked: number, pending: boolean)
 			unlockedStage = math.max(unlocked, 1)
+			tutorialPending = pending
 			if window.screen.Enabled then
 				render()
 			end

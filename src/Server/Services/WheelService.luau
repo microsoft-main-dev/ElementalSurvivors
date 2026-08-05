@@ -15,11 +15,13 @@
 	бесплатный источник того, что должно добываться игрой.
 
 	Публичный API:
-		WheelService.Spin(player)        -> (boolean, string?)
-		WheelService.NextSpinIn(player)  -> number
+		WheelService.Spin(player)              -> (boolean, string?)
+		WheelService.NextSpinIn(player)        -> number
+		WheelService.DebugResetIfNeeded(player)
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
@@ -125,6 +127,21 @@ function WheelService.Spin(player: Player): (boolean, string?)
 	end
 
 	return true, `Wheel: {prize.displayName}!`
+end
+
+--[[
+	Balance.Debug.resetWheelOnJoin: колесо сразу доступно после входа,
+	чтобы проверять прокрутку и её анимацию, не дожидаясь суток по-настоящему.
+
+	Проверка на Studio стоит здесь, а не в конфиге, тем же приёмом, что
+	у OfflineService.forcedElapsed: значение можно забыть включённым,
+	и единственная защита — та, мимо которой нельзя пройти.
+]]
+function WheelService.DebugResetIfNeeded(player: Player): ()
+	if not RunService:IsStudio() or not Balance.Debug.resetWheelOnJoin then
+		return
+	end
+	DataService.ResetWheelCooldown(player)
 end
 
 function WheelService.Init(): ()

@@ -21,7 +21,9 @@ local Abilities = require(Shared.Config.Abilities)
 local BossRenderController = require(script.Parent.BossRenderController)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
+local SettingsController = require(script.Parent.SettingsController)
 local Types = require(Shared.Types)
+local UiKit = require(script.Parent.Parent.UI.UiKit)
 
 local ICON_SIZE = 48
 local ICON_GAP = 6
@@ -61,6 +63,7 @@ local healthConnection: RBXScriptConnection? = nil
 -- Боссфайт (M6): полоса здоровья и подпись фазы.
 local bossBar: Frame? = nil
 local bossFill: Frame? = nil
+local bossHealthLabel: TextLabel? = nil
 local phaseLabel: TextLabel? = nil
 
 local function makeBar(parent: Instance, name: string, color: Color3): (Frame, Frame)
@@ -145,6 +148,13 @@ local function build(): ()
 	bossBar = bossTrack
 	bossFill = bossFillFrame
 
+	-- Числа поверх полосы: доля показывает, что дело идёт, а число — сколько
+	-- ещё бить. На боссе с двадцатью семью тысячами здоровья это разные вопросы.
+	local bossText = makeLabel(bossTrack, "BossHealthText", 11)
+	bossText.Size = UDim2.fromScale(1, 1)
+	bossText.ZIndex = 2
+	bossHealthLabel = bossText
+
 	local phase = makeLabel(gui, "Phase", 15)
 	phase.AnchorPoint = Vector2.new(0.5, 0)
 	phase.Position = UDim2.new(0.5, 0, 0, 78)
@@ -169,7 +179,8 @@ local function build(): ()
 	damage.Name = "DamageMeter"
 	damage.AnchorPoint = Vector2.new(1, 0)
 	damage.Position = UDim2.new(1, -10, 0, 34)
-	damage.Size = UDim2.fromOffset(190, 0)
+	-- Шире прежнего: в строке теперь два числа, урон и DPS.
+	damage.Size = UDim2.fromOffset(230, 0)
 	damage.AutomaticSize = Enum.AutomaticSize.Y
 	damage.BackgroundColor3 = Palette.UI.panel
 	damage.BackgroundTransparency = 0.35
@@ -304,7 +315,7 @@ local function getDamageRow(key: string): DamageRow
 	holder.Parent = damagePanel
 
 	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Size = UDim2.fromScale(0.62, 1)
+	nameLabel.Size = UDim2.fromScale(0.5, 1)
 	nameLabel.BackgroundTransparency = 1
 	nameLabel.Font = Enum.Font.Gotham
 	nameLabel.Text = if def then def.displayName else key
@@ -317,7 +328,7 @@ local function getDamageRow(key: string): DamageRow
 	local valueLabel = Instance.new("TextLabel")
 	valueLabel.AnchorPoint = Vector2.new(1, 0)
 	valueLabel.Position = UDim2.fromScale(1, 0)
-	valueLabel.Size = UDim2.fromScale(0.38, 1)
+	valueLabel.Size = UDim2.fromScale(0.5, 1)
 	valueLabel.BackgroundTransparency = 1
 	valueLabel.Font = Enum.Font.Code
 	valueLabel.Text = "0"
@@ -331,19 +342,29 @@ local function getDamageRow(key: string): DamageRow
 	return row
 end
 
--- Список урона по способностям, отсортированный по убыванию.
-local function updateDamageMeter(abilities: { Types.AbilityView }): ()
+--[[
+	Список урона по способностям, отсортированный по убыванию.
+
+	Рядом с суммарным уроном — DPS. Сумма отвечает на вопрос «что несло забег»,
+	DPS — «что несёт его сейчас»: способность, взятая на восьмой минуте, по сумме
+	всегда проигрывает стартовой, даже если бьёт вдвое сильнее. Считается от
+	времени забега, а не от времени владения способностью: серверу такое время
+	никто не считает, а гадать о нём на клиенте — значит показывать неправду.
+]]
+local function updateDamageMeter(abilities: { Types.AbilityView }, elapsed: number): ()
 	local sorted = table.clone(abilities)
 	table.sort(sorted, function(a: Types.AbilityView, b: Types.AbilityView): boolean
 		return a.damage > b.damage
 	end)
+
+	local seconds = math.max(elapsed, 1)
 
 	local seen: { [string]: boolean } = {}
 	for order, view in sorted do
 		seen[view.key] = true
 		local row = getDamageRow(view.key)
 		row.holder.LayoutOrder = order
-		row.valueLabel.Text = string.format("%d", view.damage)
+		row.valueLabel.Text = string.format("%d  %d/s", view.damage, view.damage / seconds)
 	end
 
 	for key, row in damageRows do
@@ -386,8 +407,16 @@ local function updateBoss(): ()
 
 	local active = BossRenderController.IsActive()
 	bar.Visible = active
-	if active then
-		fill.Size = UDim2.fromScale(BossRenderController.GetHealthFraction(), 1)
+	if not active then
+		return
+	end
+
+	fill.Size = UDim2.fromScale(BossRenderController.GetHealthFraction(), 1)
+
+	local label = bossHealthLabel
+	if label then
+		local current, maximum = BossRenderController.GetHealth()
+		label.Text = `{UiKit.FormatAmount(math.max(current, 0))} / {UiKit.FormatAmount(maximum)}`
 	end
 end
 
@@ -440,7 +469,7 @@ local function onHeartbeat(deltaTime: number): ()
 		end
 	end
 
-	updateDamageMeter(current.abilities)
+	updateDamageMeter(current.abilities, current.time)
 	updateHealth()
 	updateBoss()
 end
@@ -479,6 +508,12 @@ function HudController.Start(): ()
 
 	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(function()
 		setVisible(true)
+		-- Настройка не меняется в бою (LobbyRequest заблокирован во время
+		-- забега), поэтому решить достаточно один раз на старте.
+		local panel = damagePanel
+		if panel then
+			panel.Visible = SettingsController.Get().showDamageMeter
+		end
 	end)
 
 	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(function()
