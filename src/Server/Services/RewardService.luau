@@ -23,6 +23,7 @@ local LeaderboardService = require(script.Parent.LeaderboardService)
 local QuestService = require(script.Parent.QuestService)
 local Rewards = require(Shared.Config.Rewards)
 local Stages = require(Shared.Config.Stages)
+local TutorialService = require(script.Parent.TutorialService)
 local Types = require(Shared.Types)
 
 local RewardService = {}
@@ -55,8 +56,19 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 	local essence: number
 	local xp: number
 
+	--[[
+		Обучающий уровень (M7) платит по своим правилам и мимо всех остальных:
+		фиксированная сумма ровно на одно яйцо, опыт ровно до следующего
+		уровня и гарантированный предмет — всё одноразовое и всё считается
+		в TutorialService, где живёт флаг обучения.
+	]]
+	local isTutorial = summary.mode == "Tutorial"
+	local tutorialItems: { Types.ItemInstance } = {}
+
 	local stage = if summary.mode == "Story" then Stages.Get(summary.stageIndex) else nil
-	if stage then
+	if isTutorial then
+		essence, xp, tutorialItems = TutorialService.AwardRun(player, summary.victory)
+	elseif stage then
 		essence, xp = Rewards.ForStage(stage, summary.victory, summary.time)
 	else
 		essence = Rewards.EssenceForRun(summary.kills, summary.time)
@@ -76,10 +88,15 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		умножать вообще есть что: забег, за который не начислено ничего,
 		не должен съедать покупку.
 
+		Обучающий уровень исключён из обоих: его выплата — это выданная
+		сумма ровно на одно яйцо, а не заработок. Умножить её значило бы
+		выдать новичку х10 стартового капитала, а сжечь на ней купленный
+		заряд — отнять покупку за забег, который игрок не выбирал.
+
 		Опыт персонажа не умножается: раздел 10 ТЗ запрещает донату давать силу.
 	]]
 	local essenceMult = 1
-	if essence > 0 then
+	if essence > 0 and not isTutorial then
 		essenceMult = BoostService.GetMultipliers(player).essence * BoostService.ConsumeRunCharge(player)
 		if essenceMult > 1 then
 			essence = math.floor(essence * essenceMult)
@@ -121,7 +138,7 @@ function RewardService.Award(player: Player, summary: Types.RunSummary): Types.R
 		утешительную долю валюты и опыта, но ничего уникального: иначе фарм
 		поражений стал бы рабочей стратегией.
 	]]
-	local items: { Types.ItemInstance } = {}
+	local items: { Types.ItemInstance } = tutorialItems
 	if stage and summary.victory then
 		items = ItemService.GrantForStage(player, stage)
 	end

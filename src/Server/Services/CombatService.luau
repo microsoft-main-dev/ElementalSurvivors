@@ -19,6 +19,7 @@
 		CombatService.BeginRun(player)              -> boolean
 		CombatService.EndRun(player, reason)
 		CombatService.GetRunStats(player)           -> RunStats?
+		CombatService.BeginBossFightTest(player)    -> boolean
 ]]
 
 local Players = game:GetService("Players")
@@ -40,6 +41,7 @@ local ProgressionService = require(script.Parent.ProgressionService)
 local RewardService = require(script.Parent.RewardService)
 local StageService = require(script.Parent.StageService)
 local TalentService = require(script.Parent.TalentService)
+local TutorialService = require(script.Parent.TutorialService)
 local Types = require(Shared.Types)
 
 export type RunStats = {
@@ -314,7 +316,25 @@ function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex:
 		return false
 	end
 
-	if mode ~= "Story" and mode ~= "Endless" then
+	if mode ~= "Story" and mode ~= "Endless" and mode ~= "Tutorial" then
+		return false
+	end
+
+	--[[
+		Обучение (M7, раздел 4 ТЗ). Пока обучающий уровень не выигран, он
+		единственный доступный режим, а после победы — единственный
+		недоступный: награда за него одноразовая, и второй заход за ней
+		не пускается здесь, а не в панели у портала.
+
+		Проверка серверная не для галочки: панель рисует то, что ей сказали,
+		а войти в режим можно только отсюда.
+	]]
+	if mode == "Tutorial" then
+		if not TutorialService.CanPlayTutorial(player) then
+			return false
+		end
+	elseif not TutorialService.AllowsPlay(player) then
+		notify(player, "Finish the tutorial stage first.")
 		return false
 	end
 
@@ -426,7 +446,12 @@ function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex:
 		и масштаб врагов, и набор типов, и длительность фазы выживания.
 		В бесконечном режиме stage равен nil, и всё работает как до M6.
 	]]
-	local stage = if mode == "Story" then StageService.Begin(slot, player, stageIndex) else nil
+	local stage: Types.StageDef? = nil
+	if mode == "Story" then
+		stage = StageService.Begin(slot, player, stageIndex)
+	elseif mode == "Tutorial" then
+		stage = StageService.BeginTutorial(slot, player)
+	end
 
 	EnemyService.StartRun(slot, player, ArenaService.GetOrigin(slot), ArenaService.GetSeed(slot), stage)
 	PickupService.StartRun(slot, player, loadout.magnetRadius)
@@ -440,6 +465,53 @@ function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex:
 	if remote then
 		remote:FireClient(player, slot, ArenaService.GetSeed(slot), loadout.magnetRadius, mode, run.stageIndex)
 	end
+	sendSnapshot(run)
+
+	return true
+end
+
+--[[
+	Тестовая кнопка "BossFight" в лобби (M7): текущий открытый сюжетный
+	уровень, но с максимальным билдом и без фазы выживания — чтобы проверять
+	баланс боссов, не пережидая забег заново на каждую правку.
+
+	Studio-only. Обычный BeginRun не трогаем — оборачиваем его и следом
+	подкручиваем уровень и фазу тем же двум сервисам, что уже это умеют.
+]]
+function CombatService.BeginBossFightTest(player: Player, stageIndex: number): boolean
+	if not RunService:IsStudio() then
+		return false
+	end
+
+	--[[
+		Номер уровня выбирает кнопка: у каждой локации свой босс, и добраться
+		до второго по-настоящему — это полтора часа игры. Ноль означает
+		«текущий открытый».
+
+		Уровень при этом открывается: проверять право на отладочной кнопке,
+		которая существует только в Studio, значит сделать её бесполезной
+		ровно там, где она нужна.
+	]]
+	local stage = if stageIndex > 0 then stageIndex else StageService.HighestUnlocked(player)
+	DataService.DebugUnlockStages(player, stage)
+
+	if not CombatService.BeginRun(player, "Story", stage) then
+		return false
+	end
+
+	local run = runs[player]
+	if not run then
+		return false
+	end
+
+	local playerLocal = getPlayerLocal(run)
+	if not playerLocal then
+		return false
+	end
+
+	StageService.DebugRushToBoss(run.slot, playerLocal)
+	ProgressionService.DebugMaxLevel(run.slot)
+	-- BeginRun уже отправил снимок — состояние успело измениться, шлём заново.
 	sendSnapshot(run)
 
 	return true

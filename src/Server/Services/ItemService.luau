@@ -87,6 +87,24 @@ function ItemService.GrantForStage(player: Player, stage: Types.StageDef): { Ite
 	return granted
 end
 
+--[[
+	Выдать один предмет заданной редкости.
+
+	Нужно там, где предмет обещан не уровнем, а событием: обучающий босс
+	(M7) даёт гарантированный Common. Отдельная функция, а не аргумент
+	к GrantForStage: у той своя логика шанса и количества, и «выдай ровно
+	один, ровно такой» в неё не вписывается, не сломав обе.
+]]
+function ItemService.GrantOne(player: Player, stageIndex: number, rarity: Types.ItemRarity): ItemInstance?
+	local item = Items.Roll(stageIndex, rarity, random)
+	if not DataService.AddItem(player, item) then
+		return nil
+	end
+
+	ItemService.PushView(player)
+	return item
+end
+
 function ItemService.Equip(player: Player, uid: string): (boolean, string?)
 	local data = DataService.GetProfile(player)
 	if not data then
