@@ -18,7 +18,7 @@
 	по боссу нет — иначе половина форм однажды перестала бы его задевать.
 
 	Публичный API:
-		BossService.Spawn(slot, player, bossKey, health) -> boolean
+		BossService.Spawn(slot, player, bossKey, health, playerLocal) -> boolean
 		BossService.Tick(slot, dt, playerLocal)
 		BossService.CollectHit(slot, position, radius)   -> boolean
 		BossService.Damage(slot, amount)                 -> (boolean, number)
@@ -36,6 +36,7 @@ local Bosses = require(Shared.Config.Bosses)
 local EnemyMotion = require(Shared.Util.EnemyMotion)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
+local RNG = require(Shared.Util.RNG)
 local Types = require(Shared.Types)
 
 type BossDef = Types.BossDef
@@ -69,6 +70,26 @@ type State = {
 
 	stateTimer: number,
 	dead: boolean,
+	rng: RNG.RNG,
+
+	--[[
+		Стойкие поля (M2+): лечащие и ядовитые лужи шамана. Первые эффекты,
+		которые живут дольше кадра, поэтому у босса появился свой список —
+		остальные атаки бьют мгновенно и хранить о них нечего.
+	]]
+	fields: { Field },
+}
+
+type Field = {
+	kind: Types.BossFieldKind,
+	x: number,
+	z: number,
+	radius: number,
+	remaining: number,
+	tickInterval: number,
+	tickTimer: number,
+	damage: number,
+	heal: number,
 }
 
 local BossService = {}
@@ -81,6 +102,13 @@ local deathHandler: ((slot: number, player: Player) -> ())? = nil
 local contactHandler: ((player: Player, damage: number) -> ())? = nil
 
 local STATE_INTERVAL = 0.1
+
+--[[
+	Сколько врагов опрашивается при поиске скопления под лечащее поле.
+	Восьми хватает, чтобы найти толпу, и это восемь запросов к хешу вместо
+	перебора всех трёхсот.
+]]
+local CLUSTER_SAMPLES = 8
 
 local function sendEvent(state: State, payload: { [string]: any }): ()
 	local remote = eventRemote
@@ -123,21 +151,123 @@ local function beginAttack(state: State, attack: BossAttack, playerLocal: Vector
 		dx, dz = 1, 0
 	end
 
-	sendEvent(state, {
+	--[[
+		ГЕОМЕТРИЯ ТЕЛЕГРАФА ОБЯЗАНА СОВПАДАТЬ С ГЕОМЕТРИЕЙ УДАРА.
+
+		Раньше круг рисовался в точке, где стоял игрок в момент начала показа
+		(aimX/aimZ), а бил Shockwave по кругу вокруг БОССА. Эти две области
+		совпадали только частично: игрок уходил из нарисованного круга и всё
+		равно получал урон, или стоял в нём и не получал ничего. Со стороны
+		это выглядело как «круг ничего не делает» — и это был не визуальный
+		баг, а разъехавшиеся данные.
+
+		Теперь центр телеграфа — сам босс (он на время показа стоит), а форма
+		соответствует атаке: круг для Shockwave и Summon, полоса вдоль рывка
+		для Charge. harmless говорит клиенту, что эта область не бьёт вовсе:
+		Summon только высаживает врагов, и красный круг там был бы обманом.
+	]]
+	local payload: { [string]: any } = {
 		kind = "Telegraph",
 		attack = attack.kind,
+		shape = "Circle",
 		x = state.position.X,
 		z = state.position.Z,
-		aimX = state.aimX,
-		aimZ = state.aimZ,
 		dirX = dx,
 		dirZ = dz,
 		radius = attack.radius,
+		length = 0,
+		width = 0,
 		duration = attack.telegraph,
-	})
+		harmless = attack.kind == "Summon",
+	}
+
+	if attack.kind == "Charge" then
+		payload.shape = "Line"
+		-- Ровно тот путь, который босс пролетит: скорость на длительность рывка.
+		payload.length = (attack.speed or 0) * Balance.Bosses.chargeSeconds
+		payload.width = state.def.radius * 2
+	end
+
+	sendEvent(state, payload)
 
 	state.chargeX = dx
 	state.chargeZ = dz
+end
+
+--[[
+	Поставить поле и рассказать о нём клиенту.
+
+	Клиент получает круг один раз: он не двигается, а остаток времени клиент
+	отсчитывает сам. Слать его каждый тик значило бы гонять по сети то,
+	что обе стороны и так знают.
+]]
+local function addField(state: State, kind: Types.BossFieldKind, attack: BossAttack, x: number, z: number): ()
+	local duration = attack.duration or 0
+	local interval = attack.tickInterval or 1
+
+	table.insert(state.fields, {
+		kind = kind,
+		x = x,
+		z = z,
+		radius = attack.radius,
+		remaining = duration,
+		tickInterval = interval,
+		-- Первый тик не мгновенный: у игрока есть интервал, чтобы выйти.
+		tickTimer = interval,
+		damage = attack.damage,
+		heal = attack.heal or 0,
+	})
+
+	sendEvent(state, {
+		kind = "Field",
+		field = kind,
+		x = x,
+		z = z,
+		radius = attack.radius,
+		duration = duration,
+	})
+end
+
+--[[
+	Тик полей: лечение своим, урон игроку.
+
+	Урон идёт тем же обработчиком касания, что и всё остальное, — значит
+	i-frames у игрока общие, и лужа не пробивает их отдельным путём.
+]]
+local function fieldStep(state: State, dt: number, playerLocal: Vector3): ()
+	local index = 1
+
+	while index <= #state.fields do
+		local field = state.fields[index]
+		field.remaining -= dt
+
+		if field.remaining <= 0 then
+			-- Порядок не важен: поля независимы, и дешевле переставить последнее.
+			state.fields[index] = state.fields[#state.fields]
+			state.fields[#state.fields] = nil :: any
+			continue
+		end
+
+		field.tickTimer -= dt
+		if field.tickTimer <= 0 then
+			field.tickTimer += field.tickInterval
+
+			if field.kind == "Heal" then
+				EnemyService.Heal(state.slot, Vector3.new(field.x, 0, field.z), field.radius, field.heal)
+			else
+				local dx = playerLocal.X - field.x
+				local dz = playerLocal.Z - field.z
+				if dx * dx + dz * dz <= field.radius * field.radius then
+					local handler = contactHandler
+					if handler then
+						handler(state.player, field.damage)
+					end
+				end
+			end
+		end
+
+		index += 1
+	end
 end
 
 --[[
@@ -171,10 +301,33 @@ local function executeAttack(state: State, attack: BossAttack, playerLocal: Vect
 		end
 	elseif attack.kind == "Charge" then
 		-- Урон рывка наносится касанием во время движения, а не сразу:
-		-- уклонившийся в сторону игрок обязан остаться целым.
-		state.chargeTime = attack.radius > 0 and 0.9 or 0
+		-- уклонившийся в сторону игрок обязан остаться целым. Длительность
+		-- общая с клиентом (он по ней рисует полосу), поэтому из конфига.
+		state.chargeTime = Balance.Bosses.chargeSeconds
 	elseif attack.kind == "Summon" then
-		EnemyService.SpawnBurst(state.slot, state.position, attack.count or 0, attack.radius)
+		EnemyService.SpawnBurst(state.slot, state.position, attack.count or 0, attack.radius, attack.summonKey)
+	elseif attack.kind == "HealField" then
+		--[[
+			Лечение ставится НАД СКОПЛЕНИЕМ призванных, а не под боссом:
+			в этом вся механика — игрок должен выбирать, гнать ли толпу
+			из-под лечения или бить самого шамана.
+
+			Толпы нет — лечим вокруг себя: поле, поставленное в пустоту,
+			выглядело бы как промах босса, а не как решение игрока.
+		]]
+		local cluster = EnemyService.FindCluster(state.slot, attack.radius, CLUSTER_SAMPLES)
+		local center = cluster or state.position
+		addField(state, "Heal", attack, center.X, center.Z)
+	elseif attack.kind == "PoisonField" then
+		--[[
+			Ядовитая лужа — в случайной точке арены, а не под игроком: она
+			должна отнимать место, а не бить наверняка. Точка не ближе
+			собственного радиуса к краю, иначе половина лужи уходит за стену.
+		]]
+		local limit = Balance.Arena.size * 0.5 - attack.radius
+		local x = state.rng.NextNumber(-limit, limit)
+		local z = state.rng.NextNumber(-limit, limit)
+		addField(state, "Poison", attack, x, z)
 	end
 end
 
@@ -257,6 +410,7 @@ function BossService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 	end
 
 	moveStep(state, dt, playerLocal)
+	fieldStep(state, dt, playerLocal)
 	contactStep(state, playerLocal)
 
 	state.stateTimer += dt
@@ -293,6 +447,21 @@ function BossService.CollectHit(slot: number, position: Vector3, radius: number)
 	return dx * dx + dz * dz <= reach * reach
 end
 
+--[[
+	Позиция живого босса или nil, если его нет.
+
+	Нужна нацеливанию способностей: направленные формы выбирают цель среди
+	врагов из плоских массивов, а босс в них не лежит — без этой функции
+	они его просто не видят.
+]]
+function BossService.GetPosition(slot: number): Vector3?
+	local state = states[slot]
+	if not state or state.dead then
+		return nil
+	end
+	return state.position
+end
+
 -- Возвращает (убит ли, сколько урона реально нанесено).
 function BossService.Damage(slot: number, amount: number): (boolean, number)
 	local state = states[slot]
@@ -318,23 +487,46 @@ function BossService.Damage(slot: number, amount: number): (boolean, number)
 	return true, dealt
 end
 
-function BossService.Spawn(slot: number, player: Player, bossKey: string, health: number): boolean
+--[[
+	Где босс выходит.
+
+	НЕ в центре арены и НЕ на игроке. Раньше он появлялся ровно в центре —
+	там же, где игрока ставит спавн, — и в половине забегов рождался прямо
+	на нём: игрок получал несколько касаний, ещё не увидев противника.
+
+	Точка берётся в стороне от игрока, В СТОРОНУ ЦЕНТРА арены: так босс
+	не выходит в стене за спиной и всегда оказывается на открытом месте.
+	Игрок в самом центре — направление берётся любое фиксированное, лишь бы
+	не нулевое.
+]]
+local function spawnPosition(playerLocal: Vector3): Vector3
+	local length = math.sqrt(playerLocal.X * playerLocal.X + playerLocal.Z * playerLocal.Z)
+	local dirX, dirZ = 1, 0
+
+	if length > 1e-3 then
+		dirX, dirZ = -playerLocal.X / length, -playerLocal.Z / length
+	end
+
+	local distance = Balance.Bosses.spawnDistance
+	return EnemyMotion.ClampToArena(
+		Vector3.new(playerLocal.X + dirX * distance, 0, playerLocal.Z + dirZ * distance),
+		Balance.Arena.size
+	)
+end
+
+function BossService.Spawn(slot: number, player: Player, bossKey: string, health: number, playerLocal: Vector3): boolean
 	local def = Bosses.ByKey[bossKey]
 	if not def then
 		warn(`[BossService] Неизвестный босс "{bossKey}"`)
 		return false
 	end
 
-	--[[
-		Босс появляется в центре арены, а не рядом с игроком: он должен быть
-		виден целиком в момент выхода, а не вырасти вплотную к лицу.
-	]]
 	local state: State = {
 		slot = slot,
 		player = player,
 		def = def,
 
-		position = Vector3.zero,
+		position = spawnPosition(playerLocal),
 		health = health,
 		maxHealth = health,
 
@@ -351,6 +543,14 @@ function BossService.Spawn(slot: number, player: Player, bossKey: string, health
 
 		stateTimer = 0,
 		dead = false,
+
+		fields = {},
+		--[[
+			Свой генератор на боссфайт: ядовитые лужи должны ложиться
+			по-разному от забега к забегу, но не тянуть общий Random,
+			от которого зависит расстановка колонн и роллы яиц.
+		]]
+		rng = RNG.new(os.clock() * 1000 % 2147483647),
 	}
 
 	states[slot] = state
