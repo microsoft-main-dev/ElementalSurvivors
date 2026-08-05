@@ -55,6 +55,12 @@ local function build(): ()
 	backdrop.BackgroundColor3 = Palette.UI.background
 	backdrop.BackgroundTransparency = 0.35
 	backdrop.BorderSizePixel = 0
+	--[[
+		Ввод дальше не идёт: выбор карточки — единственное решение игрока в бою,
+		и мимо карточек нажиматься не должно ничего. Закрытия по клику мимо нет:
+		карточку обязаны выбрать.
+	]]
+	backdrop.Active = true
 	backdrop.Parent = gui
 
 	local title = Instance.new("TextLabel")

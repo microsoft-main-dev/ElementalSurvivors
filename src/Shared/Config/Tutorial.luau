@@ -137,9 +137,14 @@ Tutorial.RunHints = runHints
 local intro: { Types.TutorialStep } = {
 	{
 		id = "PetIntro",
-		text = "You already have a pet. It decides which ability you start a run with. Open Pets",
+		text = "You already have a pet. It decides which ability you start a run with. Open Inventory",
 		advance = "OpenPanel",
-		panel = "Pets",
+		--[[
+			Питомцы, снаряжение и расходники живут разделами одного инвентаря,
+			поэтому шаги ждут именно окно: кнопки «Pets» в лобби больше нет,
+			а подсветка и фильтр тура работают по имени кнопки.
+		]]
+		panel = "Inventory",
 		arrow = "Pets",
 	},
 	{
@@ -191,9 +196,9 @@ local outro: { Types.TutorialStep } = {
 	},
 	{
 		id = "PetsAgain",
-		text = "Equip your best pet here. Duplicates are not wasted — they feed XP into the pet you own",
+		text = "Equip your best pet in the Pets tab. Duplicates are not wasted — they evolve the pet you own",
 		advance = "OpenPanel",
-		panel = "Pets",
+		panel = "Inventory",
 		arrow = "Pets",
 	},
 	{
@@ -212,16 +217,16 @@ local outro: { Types.TutorialStep } = {
 	},
 	{
 		id = "GearIntro",
-		text = "The boss also dropped gear. Open Gear",
+		text = "The boss also dropped gear. Open Inventory and switch to the Gear tab",
 		advance = "OpenPanel",
-		panel = "Items",
+		panel = "Inventory",
 		arrow = "Items",
 	},
 	{
 		id = "EquipItem",
-		text = "Equip it. Four slots, one item each, bonuses stack with your pet and talents",
+		text = "Tap the item, then Equip. Four slots, one item each, bonuses stack with your pet and talents",
 		advance = "EquipItem",
-		panel = "Items",
+		panel = "Inventory",
 		arrow = "",
 	},
 	{

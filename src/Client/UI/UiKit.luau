@@ -21,6 +21,16 @@ local UiKit = {}
 UiKit.ButtonHeight = 48 -- не меньше 44 пикселей
 UiKit.RowHeight = 64
 UiKit.Corner = 10
+UiKit.TabHeight = 40
+UiKit.ChipHeight = 32
+--[[
+	Ячейка инвентаря. Ширина — тач-таргет, высота с запасом на подпись под
+	иконкой (звёзды у питомца, слот у снаряжения): одна высота на все вкладки,
+	иначе сетка прыгала бы при переключении.
+]]
+UiKit.SlotSize = 76
+UiKit.SlotHeight = 94
+UiKit.SlotGap = 8
 
 --[[
 	Автомасштаб окна по вьюпорту (раздел 2 ТЗ, M7). Все панели верстались на
@@ -206,6 +216,10 @@ end
 
 	Возвращает саму панель (её показывают и прячут) и контейнер содержимого,
 	чтобы вызывающий не знал про внутреннее устройство шапки.
+
+	ОКНО МОДАЛЬНОЕ. Пока оно открыто, кнопки лобби под ним не нажимаются,
+	и это не косметика: раньше поверх выбора в одном окне открывалось второе,
+	а первое оставалось висеть с уже неверными данными.
 ]]
 export type Window = {
 	screen: ScreenGui,
@@ -224,15 +238,36 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	screen.Enabled = false
 	screen.Parent = parent
 
-	local backdrop = UiKit.Frame(screen, "Backdrop", Palette.UI.background)
-	backdrop.Size = UDim2.fromScale(1, 1)
+	--[[
+		Подложка — кнопка, а не фрейм, по двум причинам сразу: кнопка
+		перехватывает клики по всему экрану (сквозь неинтерактивный фрейм
+		Roblox пропускает их к кнопкам под ним, из-за чего панель лобби
+		и оставалась нажимаемой), и она же даёт закрытие по клику мимо окна.
+	]]
+	local backdrop = Instance.new("TextButton")
+	backdrop.Name = "Backdrop"
+	backdrop.BackgroundColor3 = Palette.UI.background
 	backdrop.BackgroundTransparency = 0.35
+	backdrop.BorderSizePixel = 0
+	backdrop.AutoButtonColor = false
+	backdrop.Text = ""
+	backdrop.Size = UDim2.fromScale(1, 1)
+	backdrop.Parent = screen
 
 	local panel = UiKit.Frame(backdrop, "Panel", Palette.UI.panel)
 	panel.AnchorPoint = Vector2.new(0.5, 0.5)
 	panel.Position = UDim2.fromScale(0.5, 0.5)
 	panel.Size = UDim2.fromScale(0.88, 0.82)
+	--[[
+		Без этого клик по пустому месту ВНУТРИ окна проваливался бы в подложку
+		и закрывал его: фрейм сам по себе ввод не перехватывает.
+	]]
+	panel.Active = true
 	UiKit.Corners(panel, 14)
+
+	backdrop.Activated:Connect(function()
+		screen.Enabled = false
+	end)
 
 	local uiScale = Instance.new("UIScale")
 	uiScale.Parent = panel
@@ -322,6 +357,143 @@ function UiKit.Row(parent: Instance, order: number, accent: Color3): Row
 	layout.Parent = actions
 
 	return { frame = frame, badge = badge, title = title, subtitle = subtitle, actions = actions }
+end
+
+--[[
+	Сетка ячеек: прокручиваемая область, которая сама переносит ячейки
+	по ширине. Считать, сколько их влезает в ряд, не нужно ни разу — на телефоне
+	и на десктопе это разные числа, и любое посчитанное однажды будет неверным
+	на второй половине устройств.
+]]
+function UiKit.Grid(parent: Instance, name: string, cellWidth: number, cellHeight: number): ScrollingFrame
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Name = name
+	scroll.BackgroundTransparency = 1
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 4
+	scroll.ScrollBarImageColor3 = Palette.UI.accent
+	scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	scroll.CanvasSize = UDim2.new()
+	scroll.Parent = parent
+
+	local layout = Instance.new("UIGridLayout")
+	layout.CellSize = UDim2.fromOffset(cellWidth, cellHeight)
+	layout.CellPadding = UDim2.fromOffset(UiKit.SlotGap, UiKit.SlotGap)
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = scroll
+
+	return scroll
+end
+
+--[[
+	Пустая ячейка инвентаря: квадрат с рамкой, в который кладут иконку.
+
+	Отдельно от иконки предмета, потому что ячейка существует и без него:
+	классический инвентарь показывает и то, чего в нём нет, — иначе три предмета
+	выглядят как список из трёх строк, а не как инвентарь.
+]]
+function UiKit.Slot(parent: Instance, name: string, order: number): TextButton
+	local slot = Instance.new("TextButton")
+	slot.Name = name
+	slot.LayoutOrder = order
+	slot.BackgroundColor3 = Palette.UI.slot
+	slot.BackgroundTransparency = 0.25
+	slot.BorderSizePixel = 0
+	slot.AutoButtonColor = false
+	slot.Text = ""
+	slot.Size = UDim2.fromScale(1, 1)
+	slot.Parent = parent
+	UiKit.Corners(slot, 8)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "Border"
+	stroke.Color = Palette.UI.panel
+	stroke.Thickness = 2
+	stroke.Parent = slot
+
+	return slot
+end
+
+--[[
+	Компактная кнопка-переключатель: критерий сортировки, фильтр по слоту.
+
+	Ниже минимальных 44 пикселей осознанно, и это единственное место, где так
+	можно: чип не совершает действия, он меняет вид списка. Промах по нему
+	стоит одного повторного нажатия, а не потраченной валюты, — поэтому здесь
+	плотность важнее размера цели.
+]]
+function UiKit.Chip(parent: Instance, name: string, text: string, width: number, active: boolean): TextButton
+	local chip = UiKit.Button(parent, name, text, if active then Palette.UI.accent else Palette.UI.background)
+	chip.Size = UDim2.fromOffset(width, UiKit.ChipHeight)
+	chip.TextSize = 12
+	chip.TextTransparency = if active then 0 else 0.2
+	return chip
+end
+
+--[[
+	Полоса вкладок. Возвращает функцию выбора, чтобы окно могло открыться сразу
+	на нужном разделе, не повторяя подсветку у себя.
+]]
+export type Tabs = {
+	frame: Frame,
+	Select: (name: string) -> (),
+	Current: () -> string,
+}
+
+function UiKit.Tabs(parent: Instance, names: { string }, onSelect: (name: string) -> ()): Tabs
+	local frame = UiKit.Frame(parent, "Tabs")
+	frame.Size = UDim2.new(1, 0, 0, UiKit.TabHeight)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 6)
+	layout.Parent = frame
+
+	local buttons: { [string]: TextButton } = {}
+	local current = names[1] or ""
+
+	local tabs: Tabs
+	local function paint(): ()
+		for name, button in buttons do
+			local active = name == current
+			button.BackgroundColor3 = if active then Palette.UI.accent else Palette.UI.background
+			button.TextTransparency = if active then 0 else 0.25
+		end
+	end
+
+	for order, name in names do
+		local button = UiKit.Button(frame, name, name, Palette.UI.background)
+		button.LayoutOrder = order
+		button.Size = UDim2.fromOffset(104, UiKit.TabHeight)
+		button.TextSize = 15
+		button.Activated:Connect(function()
+			tabs.Select(name)
+		end)
+		buttons[name] = button
+	end
+
+	tabs = {
+		frame = frame,
+
+		Select = function(name: string)
+			if not buttons[name] then
+				return
+			end
+			current = name
+			paint()
+			onSelect(name)
+		end,
+
+		Current = function(): string
+			return current
+		end,
+	}
+
+	paint()
+	return tabs
 end
 
 -- 12345 -> "12 345". Длинные числа без разделителя читаются как каша.

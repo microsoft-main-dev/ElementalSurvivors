@@ -42,6 +42,35 @@ local Palette = {
 		SSS = Color3.fromHex("#E2603A"),
 	}),
 
+	--[[
+		Этапы звёздной лестницы (эволюция питомцев). Порядок тот же, что
+		у Pets.StarStage: белые -> фиолетовые -> красные -> бриллиантовая.
+
+		Звёзды рисуются цветом этапа везде, где показан питомец, поэтому
+		цвет обязан лежать здесь, а не в панели: панелей с питомцами уже три.
+	]]
+	Stars = table.freeze({
+		Color3.fromHex("#F2F7F4"),
+		Color3.fromHex("#A98BE8"),
+		Color3.fromHex("#E2603A"),
+		Color3.fromHex("#8FE8F0"),
+	}),
+
+	--[[
+		Снаряжение в инвентаре. Текстур у предметов нет и не будет до тех пор,
+		пока владелец не даст ассеты, поэтому предмет — это цветной квадрат,
+		и цвет обязан читаться как материал вещи: сталь шлема, кожа нагрудника,
+		тёмная кожа сапог, золото амулета. Редкость поверх этого добавляет
+		свечение (см. Client/UI/ItemIcon), а не свой цвет: иначе легендарные
+		сапоги перестали бы быть сапогами.
+	]]
+	Gear = table.freeze({
+		Helmet = Color3.fromHex("#9FB3C8"),
+		Chest = Color3.fromHex("#A5734B"),
+		Boots = Color3.fromHex("#6B4A32"),
+		Trinket = Color3.fromHex("#E8CE4B"),
+	}),
+
 	-- Лобби
 	Lobby = table.freeze({
 		floor = Color3.fromHex("#20302A"),
@@ -116,6 +145,9 @@ local Palette = {
 	UI = table.freeze({
 		background = Color3.fromHex("#122019"),
 		panel = Color3.fromHex("#1B2C24"),
+		-- Пустая ячейка инвентаря: темнее панели, но не чёрная — ряд пустых
+		-- ячеек должен читаться как сетка, а не как дырка в окне.
+		slot = Color3.fromHex("#0E1813"),
 		text = Color3.fromHex("#F2F7F4"),
 		subtext = Color3.fromHex("#8FD3AC"),
 		accent = Color3.fromHex("#4FA97C"),

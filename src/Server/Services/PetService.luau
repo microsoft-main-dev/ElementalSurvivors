@@ -222,17 +222,66 @@ end
 --[[
 	Эволюция: съесть других питомцев и получить звезду.
 
-	Рецепт (Config/Pets) требует двух вещей: питомцев ТОГО ЖЕ вида и любых —
-	каждого со своей позицией на лестнице. Корм выбирается автоматически,
-	по правилу «сначала самых бесполезных»: меньше звёзд, потом меньше опыта.
-	Так игрок не скормит случайно то, во что уже вложился.
+	Рецепт (Config/Pets) требует двух вещей: питомцев ТОГО ЖЕ вида и питомцев
+	ТОЙ ЖЕ СТИХИИ — каждого со своей позицией на лестнице. Корм выбирается
+	автоматически, по правилу «сначала самых бесполезных»: меньше звёзд, потом
+	меньше опыта. Так игрок не скормит случайно то, во что уже вложился.
 
 	Экипированный питомец кормом не станет никогда — это проверяет и профиль.
+
+	petId сужает выбор до одного вида (копии), element — до одной стихии (корм).
+	Оба nil означали бы «любой питомец», и такого требования в рецептах больше
+	нет: корм своей стихии — решение владельца, из-за него пул корма у каждого
+	питомца сузился с двенадцати видов до двух.
 ]]
+-- Годится ли этот питомец в жертвы: вид, стихия, позиция на лестнице и то,
+-- что он не сам эволюционирующий и не экипированный.
+local function isEdible(
+	data: Types.ProfileData,
+	pet: PetInstance,
+	targetUid: string,
+	petId: string?,
+	element: Types.Element?,
+	stars: number
+): boolean
+	if pet.uid == targetUid or pet.uid == data.equippedPet then
+		return false
+	end
+	if petId ~= nil and pet.petId ~= petId then
+		return false
+	end
+	if element ~= nil then
+		local def = Pets.ByKey[pet.petId]
+		if not def or def.element ~= element then
+			return false
+		end
+	end
+	return (pet.stars or Pets.StartStars(pet.petId)) == stars
+end
+
+-- Сколько подходящих есть всего. Нужно только витрине: сама эволюция берёт
+-- список, а не число.
+local function countMatching(
+	data: Types.ProfileData,
+	target: PetInstance,
+	petId: string?,
+	element: Types.Element?,
+	stars: number
+): number
+	local count = 0
+	for _, pet in data.pets do
+		if isEdible(data, pet, target.uid, petId, element, stars) then
+			count += 1
+		end
+	end
+	return count
+end
+
 local function pickFodder(
 	data: Types.ProfileData,
 	targetUid: string,
 	petId: string?,
+	element: Types.Element?,
 	stars: number,
 	count: number
 ): { string }?
@@ -242,10 +291,7 @@ local function pickFodder(
 
 	local candidates: { PetInstance } = {}
 	for _, pet in data.pets do
-		local matchesKind = petId == nil or pet.petId == petId
-		local atStars = (pet.stars or Pets.StartStars(pet.petId)) == stars
-
-		if matchesKind and atStars and pet.uid ~= targetUid and pet.uid ~= data.equippedPet then
+		if isEdible(data, pet, targetUid, petId, element, stars) then
 			table.insert(candidates, pet)
 		end
 	end
@@ -269,6 +315,97 @@ local function pickFodder(
 	return chosen
 end
 
+--[[
+	Кого именно съест эволюция этого питомца и сколько из нужного нашлось.
+
+	Одна функция и на само действие, и на витрину панели. Раньше их было две:
+	сервис выбирал корм, а панель считала «хватает или нет» своей формулой —
+	и формула панели уже была неточной там, где копии и корм требуют РАЗНОЙ
+	позиции на лестнице. Витрина обязана врать ровно столько же, сколько сервис,
+	то есть нисколько.
+
+	Возвращает nil, если питомец на финале лестницы. Иначе — рецепт, список
+	жертв (пустой, если чего-то не хватает) и сколько копий и корма реально
+	нашлось; корм уже без тех, кто уйдёт копиями.
+]]
+type EvolvePlan = {
+	recipe: Types.EvolveRecipe,
+	consume: { string },
+	haveCopies: number,
+	haveFodder: number,
+	ready: boolean,
+}
+
+local function planEvolve(data: Types.ProfileData, pet: PetInstance, stars: number): EvolvePlan?
+	local recipe = Pets.Recipe(stars)
+	if not recipe then
+		return nil
+	end
+
+	local def = Pets.ByKey[pet.petId]
+	local element: Types.Element? = if def then def.element else nil
+
+	--[[
+		Копии ищутся сначала и целиком: без них ступень не собрать вовсе,
+		а корм всё равно придётся искать уже без них.
+	]]
+	local copies = pickFodder(data, pet.uid, pet.petId, nil, recipe.copyStars, recipe.copies)
+	local haveCopies = if copies then recipe.copies else countMatching(data, pet, pet.petId, nil, recipe.copyStars)
+
+	local taken: { [string]: boolean } = {}
+	for _, victim in copies or {} do
+		taken[victim] = true
+	end
+
+	--[[
+		Корм ищется с запасом на число копий и потом фильтруется: иначе один
+		и тот же питомец мог бы засчитаться и копией, и кормом, а съеден был бы
+		один раз. Запас нужен только когда позиции совпадают, но просить его
+		всегда дешевле, чем сравнивать позиции ещё в одном месте.
+	]]
+	local fodder: { string } = {}
+	if recipe.fodder > 0 then
+		local pool = pickFodder(data, pet.uid, nil, element, recipe.fodderStars, recipe.fodder + recipe.copies)
+		for _, candidate in pool or {} do
+			if not taken[candidate] and #fodder < recipe.fodder then
+				table.insert(fodder, candidate)
+			end
+		end
+	end
+
+	--[[
+		Сколько корма реально доступно, когда его не хватает: то же самое
+		вычитание, но по счётчику, — панели нужно число «2 из 3», а не список.
+	]]
+	local haveFodder = #fodder
+	if haveFodder < recipe.fodder then
+		local total = countMatching(data, pet, nil, element, recipe.fodderStars)
+		-- Копии уходят из того же пула, только если стоят на той же позиции.
+		local overlap = if recipe.copyStars == recipe.fodderStars then haveCopies else 0
+		haveFodder = math.max(math.min(total - overlap, recipe.fodder), 0)
+	end
+
+	local ready = copies ~= nil and #fodder >= recipe.fodder
+
+	local consume: { string } = {}
+	if ready then
+		for _, victim in copies or {} do
+			table.insert(consume, victim)
+		end
+		for _, victim in fodder do
+			table.insert(consume, victim)
+		end
+	end
+
+	return {
+		recipe = recipe,
+		consume = consume,
+		haveCopies = haveCopies,
+		haveFodder = haveFodder,
+		ready = ready,
+	}
+end
+
 function PetService.Evolve(player: Player, uid: string): (boolean, string?)
 	local data = DataService.GetProfile(player)
 	if not data then
@@ -281,49 +418,22 @@ function PetService.Evolve(player: Player, uid: string): (boolean, string?)
 	end
 
 	local stars = pet.stars or Pets.StartStars(pet.petId)
-	local recipe = Pets.Recipe(stars)
-	if not recipe then
+	local plan = planEvolve(data, pet, stars)
+	if not plan then
 		return false, "That pet is already at its final star."
 	end
 
-	--[[
-		Корм собирается двумя порциями, и вторая ищется уже без первой:
-		иначе один и тот же питомец мог бы засчитаться и как копия, и как
-		«любой», а съеден был бы один раз.
-	]]
-	local consume = pickFodder(data, uid, pet.petId, recipe.copyStars, recipe.copies)
-	if not consume then
-		return false, `Needs {recipe.copies} more copies at {recipe.copyStars}★.`
-	end
-
-	local taken: { [string]: boolean } = {}
-	for _, victim in consume do
-		taken[victim] = true
-	end
-
-	local fodder: { string } = {}
-	if recipe.fodder > 0 then
-		local pool = pickFodder(data, uid, nil, recipe.fodderStars, recipe.fodder + #consume)
-		if not pool then
-			return false, `Needs {recipe.fodder} pets at {recipe.fodderStars}★.`
+	local recipe = plan.recipe
+	if not plan.ready then
+		local def = Pets.ByKey[pet.petId]
+		if plan.haveCopies < recipe.copies then
+			return false, `Needs {recipe.copies - plan.haveCopies} more copies at {recipe.copyStars}★.`
 		end
-
-		for _, candidate in pool do
-			if not taken[candidate] and #fodder < recipe.fodder then
-				table.insert(fodder, candidate)
-			end
-		end
-
-		if #fodder < recipe.fodder then
-			return false, `Needs {recipe.fodder} pets at {recipe.fodderStars}★.`
-		end
+		local element = if def then def.element else "matching"
+		return false, `Needs {recipe.fodder - plan.haveFodder} more {element} pets at {recipe.fodderStars}★.`
 	end
 
-	for _, victim in fodder do
-		table.insert(consume, victim)
-	end
-
-	if not DataService.EvolvePet(player, uid, consume) then
+	if not DataService.EvolvePet(player, uid, plan.consume) then
 		return false, "Could not evolve that pet."
 	end
 
@@ -420,35 +530,25 @@ end
 	конкретный питомец кормом, — иначе он покажет одно, а сервер сделает другое.
 ]]
 local function evolveView(data: Types.ProfileData, pet: PetInstance, stars: number): Types.EvolveView?
-	local recipe = Pets.Recipe(stars)
-	if not recipe then
+	local plan = planEvolve(data, pet, stars)
+	if not plan then
 		return nil
 	end
 
-	local haveCopies = 0
-	local haveFodder = 0
-
-	for _, candidate in data.pets do
-		if candidate.uid == pet.uid or candidate.uid == data.equippedPet then
-			continue
-		end
-
-		local at = candidate.stars or Pets.StartStars(candidate.petId)
-		if at == recipe.copyStars and candidate.petId == pet.petId then
-			haveCopies += 1
-		end
-		if at == recipe.fodderStars then
-			haveFodder += 1
-		end
-	end
+	local recipe = plan.recipe
+	local def = Pets.ByKey[pet.petId]
 
 	return {
 		copies = recipe.copies,
 		copyStars = recipe.copyStars,
 		fodder = recipe.fodder,
 		fodderStars = recipe.fodderStars,
-		haveCopies = haveCopies,
-		haveFodder = haveFodder,
+		-- Питомца без записи в конфиге панель и так пропускает; стихия здесь
+		-- нужна только чтобы тип не был необязательным ради невозможного случая.
+		fodderElement = if def then def.element else "Fire",
+		haveCopies = plan.haveCopies,
+		haveFodder = plan.haveFodder,
+		ready = plan.ready,
 	}
 end
 

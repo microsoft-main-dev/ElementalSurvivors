@@ -78,6 +78,13 @@ local function build(): ()
 	backdrop.BackgroundColor3 = Palette.UI.background
 	backdrop.BackgroundTransparency = 0.25
 	backdrop.BorderSizePixel = 0
+	--[[
+		Ввод дальше не идёт. Экран результатов появляется, когда панель лобби
+		уже вернулась на место, и без этого её кнопки нажимались бы прямо
+		сквозь него: неинтерактивный фрейм Roblox клики не задерживает.
+		Закрытия по клику мимо здесь нет намеренно — экран закрывают кнопкой.
+	]]
+	backdrop.Active = true
 	backdrop.Parent = gui
 
 	local panel = Instance.new("Frame")

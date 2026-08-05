@@ -29,12 +29,12 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local DailyPanel = require(script.Parent.Parent.UI.DailyPanel)
 local EggsPanel = require(script.Parent.Parent.UI.EggsPanel)
-local ItemsPanel = require(script.Parent.Parent.UI.ItemsPanel)
+local EvolvePanel = require(script.Parent.Parent.UI.EvolvePanel)
+local InventoryPanel = require(script.Parent.Parent.UI.InventoryPanel)
 local Net = require(Shared.Net)
 local OfflinePanel = require(script.Parent.Parent.UI.OfflinePanel)
 local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
-local PetsPanel = require(script.Parent.Parent.UI.PetsPanel)
 local SettingsPanel = require(script.Parent.Parent.UI.SettingsPanel)
 local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
 local StagePanel = require(script.Parent.Parent.UI.StagePanel)
@@ -52,13 +52,13 @@ local LobbyController = {}
 local player = Players.LocalPlayer
 
 local barGui: ScreenGui? = nil
-local petsPanel: PetsPanel.Panel? = nil
+local inventoryPanel: InventoryPanel.Panel? = nil
+local evolvePanel: EvolvePanel.Panel? = nil
 local eggsPanel: EggsPanel.Panel? = nil
 local shopPanel: ShopPanel.Panel? = nil
 local talentsPanel: TalentsPanel.Panel? = nil
 local offlinePanel: OfflinePanel.Panel? = nil
 local stagePanel: StagePanel.Panel? = nil
-local itemsPanel: ItemsPanel.Panel? = nil
 local dailyPanel: DailyPanel.Panel? = nil
 local storePanel: StorePanel.Panel? = nil
 local settingsPanel: SettingsPanel.Panel? = nil
@@ -124,9 +124,19 @@ local function refreshPanels(): ()
 	local essence = if profileView then profileView.essence else 0
 	local prisms = if profileView then profileView.prisms else 0
 
-	local pets = petsPanel
-	if pets then
-		pets.Refresh(petsView, essence)
+	local inventory = inventoryPanel
+	if inventory then
+		inventory.Refresh(petsView, itemsView, storeView, essence)
+	end
+
+	--[[
+		Меню эволюции обновляется вместе с коллекцией и по ней же узнаёт, что
+		эволюция удалась: у питомца стало больше звёзд. Отдельного события
+		об успехе нет — это состояние, а не новость.
+	]]
+	local evolveMenu = evolvePanel
+	if evolveMenu then
+		evolveMenu.Refresh(petsView)
 	end
 
 	local eggs = eggsPanel
@@ -152,11 +162,6 @@ local function refreshPanels(): ()
 		stage.Refresh(if profileView then profileView.storyStage else 1, tutorialPending)
 	end
 
-	local items = itemsPanel
-	if items then
-		items.Refresh(itemsView)
-	end
-
 	local daily = dailyPanel
 	if daily then
 		daily.Refresh(questsView, leaderboard)
@@ -174,9 +179,13 @@ local function refreshPanels(): ()
 end
 
 local function closeAll(): ()
-	local pets = petsPanel
-	if pets then
-		pets.Close()
+	local inventory = inventoryPanel
+	if inventory then
+		inventory.Close()
+	end
+	local evolveMenu = evolvePanel
+	if evolveMenu then
+		evolveMenu.Close()
 	end
 	local eggs = eggsPanel
 	if eggs then
@@ -198,10 +207,6 @@ local function closeAll(): ()
 	if stage then
 		stage.Close()
 	end
-	local items = itemsPanel
-	if items then
-		items.Close()
-	end
 	local daily = dailyPanel
 	if daily then
 		daily.Close()
@@ -217,6 +222,24 @@ local function closeAll(): ()
 end
 
 --[[
+	Имя окна, которое на самом деле откроется. Инвентарь один, но разделов
+	в нём три, и снаружи их зовут своими именами: промпт у стенда питомцев
+	шлёт «Pets», обучение — «Items». Разворачивается это здесь, потому что
+	по имени ОКНА живут и фильтр обучения, и подсветка кнопки: без общего
+	знаменателя шаг «открой Pets» гасил бы кнопку Inventory как чужую.
+]]
+local PANEL_OWNER: { [string]: string } = {
+	Pets = "Inventory",
+	Items = "Inventory",
+	Gear = "Inventory",
+	Boosts = "Inventory",
+}
+
+local function ownerOf(name: string): string
+	return PANEL_OWNER[name] or name
+end
+
+--[[
 	Открытие панели по имени. Одна точка входа и для кнопок нижней панели,
 	и для промптов у объектов: иначе объект и кнопка однажды начнут открывать
 	разные окна.
@@ -227,17 +250,31 @@ local function openPanel(name: string, target: string?): ()
 		ещё и промптом у объекта лобби, и «заблокировано только с кнопки»
 		означало бы, что игрок обходит шаг обучения ногами.
 	]]
+	local owner = ownerOf(name)
 	local focus = tutorialFocus
-	if focus and name ~= focus then
+	if focus and owner ~= ownerOf(focus) then
 		return
 	end
 
 	closeAll()
 
-	if name == "Pets" then
-		local pets = petsPanel
-		if pets then
-			pets.Open()
+	if owner == "Inventory" then
+		local inventory = inventoryPanel
+		if inventory then
+			-- name здесь и есть раздел: «Pets» открывает питомцев, «Items» —
+			-- снаряжение, сама кнопка «Inventory» — тот, что был открыт.
+			inventory.Open(if name == "Inventory" then nil else name)
+		end
+	elseif name == "Evolve" then
+		--[[
+			Единственная панель, которую открывает не кнопка лобби, а строка
+			коллекции, — и всё-таки через общую точку входа: target здесь uid
+			питомца, а не ключ объекта, но правило «панели открываются одним
+			способом» дороже этой разницы.
+		]]
+		local evolveMenu = evolvePanel
+		if evolveMenu and target then
+			evolveMenu.Open(target)
 		end
 	elseif name == "Eggs" then
 		local eggs = eggsPanel
@@ -259,11 +296,6 @@ local function openPanel(name: string, target: string?): ()
 		if stage then
 			stage.Open()
 		end
-	elseif name == "Items" then
-		local items = itemsPanel
-		if items then
-			items.Open()
-		end
 	elseif name == "Store" then
 		local store = storePanel
 		if store then
@@ -283,9 +315,14 @@ local function openPanel(name: string, target: string?): ()
 		end
 	end
 
+	--[[
+		Слушателю (обучению) сообщается имя ОКНА, а не раздела: шаг «открой
+		инвентарь» обязан засчитываться и когда игрок нажал кнопку, и когда
+		подошёл к стенду питомцев.
+	]]
 	local listener = panelListener
 	if listener then
-		listener(name)
+		listener(owner)
 	end
 end
 
@@ -296,13 +333,17 @@ end
 function LobbyController.SetTutorialFocus(name: string?): ()
 	tutorialFocus = name
 
+	-- Сравнение по имени окна: шаг может ждать раздела («Items»), а кнопка
+	-- в панели одна и зовётся «Inventory».
+	local wanted = if name then ownerOf(name) else nil
+
 	for buttonName, button in barButtons do
-		local allowed = name == nil or buttonName == name
+		local allowed = wanted == nil or buttonName == wanted
 		UiKit.SetEnabled(button, allowed)
 
 		local stroke = button:FindFirstChildOfClass("UIStroke")
 		if stroke then
-			stroke.Enabled = name ~= nil and buttonName == name
+			stroke.Enabled = wanted ~= nil and buttonName == wanted
 		end
 	end
 end
@@ -419,8 +460,12 @@ local function buildBar(): ()
 	]]
 	local buttons: { { name: string, text: string } } = {
 		{ name = "Stage", text = "Play" },
-		{ name = "Pets", text = "Pets" },
-		{ name = "Items", text = "Gear" },
+		--[[
+			Одна кнопка на всё имущество игрока: питомцы, снаряжение и расходники
+			живут разделами внутри неё. Три кнопки на три вида инвентаря
+			занимали треть панели и различались только тем, что в них лежит.
+		]]
+		{ name = "Inventory", text = "Inventory" },
 		{ name = "Eggs", text = "Eggs" },
 		{ name = "Shop", text = "Shop" },
 		{ name = "Talents", text = "Talents" },
@@ -471,13 +516,17 @@ function LobbyController.Start(): ()
 	local playerGui = player:WaitForChild("PlayerGui")
 
 	buildBar()
-	petsPanel = PetsPanel.Build(playerGui, send)
+	inventoryPanel = InventoryPanel.Build(playerGui, send, function(uid: string)
+		openPanel("Evolve", uid)
+	end)
+	evolvePanel = EvolvePanel.Build(playerGui, send, function()
+		openPanel("Pets")
+	end)
 	eggsPanel = EggsPanel.Build(playerGui, send)
 	shopPanel = ShopPanel.Build(playerGui, send)
 	talentsPanel = TalentsPanel.Build(playerGui, send)
 	offlinePanel = OfflinePanel.Build(playerGui, send)
 	stagePanel = StagePanel.Build(playerGui, send)
-	itemsPanel = ItemsPanel.Build(playerGui, send)
 	dailyPanel = DailyPanel.Build(playerGui, send)
 	-- Витрине send не нужен: покупка идёт мимо сервера, прямо в Roblox.
 	storePanel = StorePanel.Build(playerGui)
