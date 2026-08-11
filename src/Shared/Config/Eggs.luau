@@ -32,14 +32,13 @@ export type EggDef = {
 	weights: { [PetRarity]: number },
 	-- Заполняется при загрузке: суммарный вес и границы для выбора.
 	totalWeight: number,
-	color: string, -- hex, чтобы Palette не тянуть в данные
 	--[[
-		Картинка яйца в панели. Ноль означает «ассета нет» — панель рисует
-		заглушку цветом яйца, а не пустое место. Так же устроен Config/Branding
-		и звуки: выдумывать Asset ID нельзя (правило 4), а ждать их, не написав
-		панель, незачем.
+		hex, чтобы Palette не тянуть в данные. Цвет остаётся нужен и после
+		появления картинки: им красится строка яйца и заглушка, пока ассет
+		не загружен. Сам Asset ID лежит в Config/Icons вместе со всеми
+		остальными — искать сорок чисел по семи файлам не должно быть нужно.
 	]]
-	imageAssetId: number,
+	color: string,
 }
 
 local Eggs = {}
@@ -69,7 +68,6 @@ local definitions: { EggDef } = {
 		weights = { B = 87.5, A = 12, S = 0.5 },
 		totalWeight = 0,
 		color = "#8FD3AC",
-		imageAssetId = 0,
 	},
 	{
 		key = "Greater",
@@ -82,7 +80,6 @@ local definitions: { EggDef } = {
 		weights = { B = 55, A = 40, S = 5 },
 		totalWeight = 0,
 		color = "#5FC8E8",
-		imageAssetId = 0,
 	},
 	{
 		key = "Prime",
@@ -97,7 +94,6 @@ local definitions: { EggDef } = {
 		weights = { B = 20, A = 50, S = 26, SS = 3, SSS = 1 },
 		totalWeight = 0,
 		color = "#E8CE4B",
-		imageAssetId = 0,
 	},
 	--[[
 		Донатные яйца. Купить их до M7 нельзя — Prisms в игре пока не
@@ -113,7 +109,6 @@ local definitions: { EggDef } = {
 		weights = { A = 30, S = 45, SS = 20, SSS = 5 },
 		totalWeight = 0,
 		color = "#7A5BC4",
-		imageAssetId = 0,
 	},
 	{
 		key = "Radiant",
@@ -124,7 +119,6 @@ local definitions: { EggDef } = {
 		weights = { S = 55, SS = 35, SSS = 10 },
 		totalWeight = 0,
 		color = "#F2EFDF",
-		imageAssetId = 0,
 	},
 }
 

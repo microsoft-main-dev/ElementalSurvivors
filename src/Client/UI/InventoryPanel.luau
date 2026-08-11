@@ -29,6 +29,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
 local ItemIcon = require(script.Parent.ItemIcon)
 local Items = require(Shared.Config.Items)
 local Palette = require(Shared.Config.Palette)
@@ -240,9 +241,44 @@ function InventoryPanel.Build(
 	detailText.Position = UDim2.fromOffset(86, 38)
 	-- Ровно до кнопок и ни пикселем ниже: характеристики легендарного предмета
 	-- занимают две строки, и третья заехала бы под них.
-	detailText.Size = UDim2.new(1, -96, 0, 26)
+	detailText.Size = UDim2.new(1, -96, 0, 30)
 	detailText.TextWrapped = true
 	detailText.TextTruncate = Enum.TextTruncate.None
+	-- Значения выделяются цветом на фоне подписей: строка характеристик иначе
+	-- читается как один сплошной поток из точек-разделителей.
+	detailText.RichText = true
+
+	--[[
+		Шкала опыта питомца. Живёт всегда, показывается только у питомцев:
+		у снаряжения и расходников расти нечему, а создавать её на ходу значило бы
+		заводить объекты при каждой перерисовке списка.
+
+		Уровень раньше стоял подписью в общей строке характеристик и читался как
+		случайное число среди прочих. Полоса объясняет его сама: видно и где
+		питомец сейчас, и сколько осталось.
+	]]
+	local levelBar = UiKit.Frame(detail, "LevelBar", Palette.UI.slot)
+	levelBar.Position = UDim2.fromOffset(86, 58)
+	levelBar.Size = UDim2.new(1, -96, 0, 12)
+	levelBar.Visible = false
+	UiKit.Corners(levelBar, 6)
+	UiKit.Skin(levelBar, "BarBackground")
+
+	local levelFill = UiKit.Frame(levelBar, "Fill", Palette.UI.accent)
+	levelFill.Size = UDim2.fromScale(0, 1)
+	UiKit.Corners(levelFill, 6)
+
+	local levelFillSkin = UiKit.Skin(levelFill, "BarFill")
+	if levelFillSkin then
+		levelFillSkin.ImageColor3 = Palette.UI.accent
+	end
+
+	local levelLabel = UiKit.Label(levelBar, "Text", "", 11)
+	levelLabel.Size = UDim2.fromScale(1, 1)
+	levelLabel.TextXAlignment = Enum.TextXAlignment.Center
+	levelLabel.TextStrokeColor3 = Palette.UI.background
+	levelLabel.TextStrokeTransparency = 0.2
+	levelLabel.ZIndex = 2
 
 	local actions = UiKit.Frame(detail, "Actions")
 	actions.AnchorPoint = Vector2.new(0, 1)
@@ -433,12 +469,38 @@ function InventoryPanel.Build(
 
 		PetIcon.Pet(detailIcon, "Icon", pet.petId, pet.stars, 56)
 
-		detailTitle.Text = `{name}  ·  Lv {pet.level}  ·  {PetIcon.StarsMarkup(pet.stars)}`
+		--[[
+			Заголовок — только имя и звёзды. Уровень уехал строкой ниже: вместе
+			они не влезали, и имя обрезалось многоточием ровно там, где игрок
+			и отличает одного питомца от другого.
+		]]
+		detailTitle.Text = `{name}   {PetIcon.StarsMarkup(pet.stars)}`
 
-		local progress = if pet.xpToNext > 0 then `{pet.xp}/{pet.xp + pet.xpToNext} xp` else "max level"
-		local starBonus = if pet.starMult > 1 then `  ·  stars x{string.format("%.1f", pet.starMult)}` else ""
+		--[[
+			Одна строка описания, а всё, что растёт, — на шкале под ней.
+			Значения выделены цветом текста, подписи остаются приглушёнными.
+		]]
+		local value = Palette.UI.text:ToHex()
 		local element = if def then def.element else "?"
-		detailText.Text = `{element}  ·  power {string.format("%.1f", pet.power)}  ·  {progress}{starBonus}`
+		local starBonus = if pet.starMult > 1
+			then `   stars <font color="#{value}">x{string.format("%.1f", pet.starMult)}</font>`
+			else ""
+
+		detailText.Size = UDim2.new(1, -96, 0, 18)
+		detailText.Text =
+			`{element}   power <font color="#{value}">{string.format("%.1f", pet.power)}</font>{starBonus}`
+
+		--[[
+			Шкала опыта. У максимального уровня она заполнена целиком: пустая
+			полоса на потолке читалась бы как «прогресс потерян».
+		]]
+		local total = pet.xp + pet.xpToNext
+		local ratio = if pet.xpToNext > 0 and total > 0 then pet.xp / total else 1
+		levelBar.Visible = true
+		levelFill.Size = UDim2.fromScale(math.clamp(ratio, 0, 1), 1)
+		levelLabel.Text = if pet.xpToNext > 0
+			then `Lv {pet.level}   {pet.xp} / {total} xp`
+			else `Lv {pet.level}   максимум`
 
 		if pet.equipped then
 			local mark = actionButton("Equipped", "Equipped", Palette.UI.panel, 84)
@@ -455,7 +517,14 @@ function InventoryPanel.Build(
 		local upgrade = actionButton("Upgrade", "Max", Palette.UI.panel, 104)
 		upgrade.LayoutOrder = 2
 		if pet.upgradeCost > 0 then
-			upgrade.Text = `Lv+ {UiKit.FormatAmount(pet.upgradeCost)}`
+			--[[
+				Только цена и значок валюты. «Lv+» перед числом читалось как
+				часть самого числа: что за уровень и почему он в миллионах,
+				по кнопке понять было нельзя. Уровень теперь на шкале выше,
+				а кнопка отвечает ровно на один вопрос — сколько это стоит.
+			]]
+			upgrade.Text = UiKit.FormatAmount(pet.upgradeCost)
+			UiKit.ButtonIcon(upgrade, Icons.Currency.essence, 16)
 			UiKit.SetEnabled(upgrade, essenceBalance >= pet.upgradeCost)
 			upgrade.Activated:Connect(function()
 				send("UpgradePet", pet.uid, nil)
@@ -755,7 +824,7 @@ function InventoryPanel.Build(
 					borderColor(uid == chosen, false)
 				)
 
-				local icon = ItemIcon.Consumable(cell, "Icon", ICON_SIZE)
+				local icon = ItemIcon.Consumable(cell, "Icon", boost.key, ICON_SIZE)
 				icon.frame.AnchorPoint = Vector2.new(0.5, 0)
 				icon.frame.Position = UDim2.new(0.5, 0, 0, 8)
 
@@ -769,7 +838,7 @@ function InventoryPanel.Build(
 				local uid = `charge:{charge.key}`
 				local cell = buildCell(order, `x{charge.count}`, Palette.UI.text, borderColor(uid == chosen, false))
 
-				local icon = ItemIcon.Consumable(cell, "Icon", ICON_SIZE)
+				local icon = ItemIcon.Consumable(cell, "Icon", charge.key, ICON_SIZE)
 				icon.frame.AnchorPoint = Vector2.new(0.5, 0)
 				icon.frame.Position = UDim2.new(0.5, 0, 0, 8)
 
@@ -794,7 +863,7 @@ function InventoryPanel.Build(
 
 		for _, boost in view.boosts do
 			if uid == `boost:{boost.key}` then
-				ItemIcon.Consumable(detailIcon, "Icon", 56)
+				ItemIcon.Consumable(detailIcon, "Icon", boost.key, 56)
 				detailTitle.Text = boost.displayName
 				detailText.Text =
 					`Running for {UiKit.FormatDuration(boost.secondsLeft)} more. Boosters multiply Essence only.`
@@ -804,7 +873,7 @@ function InventoryPanel.Build(
 
 		for _, charge in view.charges do
 			if uid == `charge:{charge.key}` then
-				ItemIcon.Consumable(detailIcon, "Icon", 56)
+				ItemIcon.Consumable(detailIcon, "Icon", charge.key, 56)
 				detailTitle.Text = charge.displayName
 				detailText.Text = `{charge.count} left. One is spent automatically at the end of a run.`
 				return true
@@ -819,6 +888,14 @@ function InventoryPanel.Build(
 		clearChildren(actions)
 		clearChildren(detailIcon)
 		clearChildren(controls)
+
+		--[[
+			Шкала опыта — только у питомцев, и сбрасывается здесь, а не в трёх
+			ветках подробностей: забыть её в одной из них означало бы полосу
+			чужого питомца под описанием сапог.
+		]]
+		levelBar.Visible = false
+		detailText.Size = UDim2.new(1, -96, 0, 30)
 
 		local section = tabs.Current()
 

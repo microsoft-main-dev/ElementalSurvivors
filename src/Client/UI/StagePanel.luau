@@ -31,8 +31,10 @@ local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Stages = require(Shared.Config.Stages)
+local Types = require(Shared.Types)
 local UiKit = require(script.Parent.UiKit)
 
 export type Panel = {
@@ -40,6 +42,10 @@ export type Panel = {
 	Close: () -> (),
 	Refresh: (unlocked: number, tutorialPending: boolean) -> (),
 }
+
+-- Высота шапки локации. Ниже баннер перестаёт читаться, выше он съедает строку
+-- уровня: на телефоне в списке помещается три-четыре строки, и это весь экран.
+local LOCATION_HEIGHT = 72
 
 local StagePanel = {}
 
@@ -132,6 +138,38 @@ function StagePanel.Build(parent: Instance, send: (action: string, target: strin
 		end)
 	end
 
+	--[[
+		Шапка локации перед её первым уровнем.
+
+		Отдельной строкой, а не иконкой в метке: баннер широкий, а метка
+		квадратная 44x44, и вписать туда полосу 512x224 можно только изуродовав
+		её. Без ассета остаётся одна подпись — десять уровней двух локаций
+		подряд иначе читаются как один сплошной список.
+	]]
+	local function renderLocationHeader(location: Types.LocationDef, order: number): ()
+		local holder = UiKit.Frame(list, `Location{order}`, Palette.UI.background)
+		holder.LayoutOrder = order
+		holder.Size = UDim2.new(1, -8, 0, LOCATION_HEIGHT)
+		holder.BackgroundTransparency = 0.3
+		UiKit.Corners(holder, 8)
+
+		local banner = UiKit.Image(holder, "Banner", Icons.Locations[location.key])
+		if banner then
+			-- Crop, а не Fit: полоса обязана занять строку целиком, иначе вокруг
+			-- неё останутся поля и шапка перестанет быть шапкой.
+			banner.ScaleType = Enum.ScaleType.Crop
+			UiKit.Corners(banner, 8)
+		end
+
+		local title = UiKit.Label(holder, "Title", location.displayName, 18)
+		title.Font = Enum.Font.GothamBold
+		title.Position = UDim2.fromOffset(12, 8)
+		title.Size = UDim2.new(1, -24, 0, 24)
+		-- Обводка нужна только поверх баннера, но безвредна и без него.
+		title.TextStrokeColor3 = Palette.UI.background
+		title.TextStrokeTransparency = 0.1
+	end
+
 	local function render(): ()
 		UiKit.ClearList(list)
 
@@ -146,10 +184,25 @@ function StagePanel.Build(parent: Instance, send: (action: string, target: strin
 		window.subtitle.Text =
 			`Story progress: stage {math.min(unlockedStage, Stages.TotalLevels)} of {Stages.TotalLevels}`
 
+		--[[
+			Порядок строк больше не равен номеру уровня: между локациями
+			вклинивается шапка. Отдельный счётчик обязателен — при LayoutOrder
+			по номеру уровня шапка второй локации встала бы в один слот
+			с уровнем и одна из них ушла бы под другую.
+		]]
+		local order = 0
+		local currentLocation = ""
+
 		for index = 1, Stages.TotalLevels do
 			local stage = Stages.Get(index)
 			if not stage then
 				continue
+			end
+
+			if stage.location.key ~= currentLocation then
+				currentLocation = stage.location.key
+				order += 1
+				renderLocationHeader(stage.location, order)
 			end
 
 			local locked = index > unlockedStage
@@ -160,7 +213,8 @@ function StagePanel.Build(parent: Instance, send: (action: string, target: strin
 				elseif cleared then Palette.Element.Nature
 				else Palette.UI.accent
 
-			local row = UiKit.Row(list, index, accent)
+			order += 1
+			local row = UiKit.Row(list, order, accent)
 			row.badge.Text = tostring(index)
 			row.title.Text = `{stage.location.displayName} {stage.indexInLocation}`
 

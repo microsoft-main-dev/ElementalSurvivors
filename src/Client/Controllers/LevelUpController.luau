@@ -20,10 +20,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
 local Cards = require(Shared.Config.Cards)
+local Icons = require(Shared.Config.Icons)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
 local SoundController = require(script.Parent.SoundController)
 local Types = require(Shared.Types)
+local UiKit = require(script.Parent.Parent.UI.UiKit)
 
 type LevelUpCard = Types.LevelUpCard
 
@@ -150,6 +152,10 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	corner.CornerRadius = UDim.new(0, 12)
 	corner.Parent = button
 
+	-- Карточка получает ту же рамку, что и окна: это самый заметный экран
+	-- в бою, и плоский прямоугольник рядом с обрамлёнными панелями выпадал.
+	UiKit.Skin(button, "FrameWindow")
+
 	--[[
 		Контур карточки — цвет РЕДКОСТИ, а не стихии: редкость решает, сколько
 		даст карточка, и заметить её надо раньше, чем прочитать текст. Стихия
@@ -169,6 +175,29 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	local headerCorner = Instance.new("UICorner")
 	headerCorner.CornerRadius = UDim.new(0, 12)
 	headerCorner.Parent = header
+
+	--[[
+		Иконка способности крупно, между шапкой и названием.
+
+		В шапке она стояла раньше и там же терялась: шапка занимает 22% высоты
+		карточки, значок получался с ноготь, и карточка по-прежнему читалась как
+		прямоугольник с текстом. Здесь под неё отведена почти треть карточки —
+		это самый частый экран выбора в игре, и решение принимают по картинке,
+		а не по описанию.
+
+		Квадрат держит контейнер: значок вписывается в него по меньшей стороне,
+		поэтому пропорции не зависят ни от экрана, ни от числа карточек в ряду.
+	]]
+	local iconHolder = UiKit.Frame(button, "IconHolder")
+	iconHolder.Position = UDim2.fromScale(0, 0.24)
+	iconHolder.Size = UDim2.fromScale(1, 0.3)
+
+	local icon = UiKit.Image(iconHolder, "Icon", Icons.Abilities[card.abilityKey])
+	if icon then
+		icon.AnchorPoint = Vector2.new(0.5, 0.5)
+		icon.Position = UDim2.fromScale(0.5, 0.5)
+		icon.Size = UDim2.fromScale(1, 1)
+	end
 
 	local badge = Instance.new("TextLabel")
 	badge.Size = UDim2.fromScale(1, 1)
@@ -194,8 +223,8 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 
 	local name = Instance.new("TextLabel")
 	name.AnchorPoint = Vector2.new(0.5, 0)
-	name.Position = UDim2.fromScale(0.5, 0.3)
-	name.Size = UDim2.fromScale(0.86, 0.2)
+	name.Position = UDim2.fromScale(0.5, 0.56)
+	name.Size = UDim2.fromScale(0.86, 0.14)
 	name.BackgroundTransparency = 1
 	name.Font = Enum.Font.GothamBold
 	name.Text = if def then def.displayName else card.abilityKey
@@ -205,8 +234,8 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 
 	local description = Instance.new("TextLabel")
 	description.AnchorPoint = Vector2.new(0.5, 0)
-	description.Position = UDim2.fromScale(0.5, 0.54)
-	description.Size = UDim2.fromScale(0.86, 0.34)
+	description.Position = UDim2.fromScale(0.5, 0.72)
+	description.Size = UDim2.fromScale(0.86, 0.24)
 	description.BackgroundTransparency = 1
 	description.Font = Enum.Font.Gotham
 	--[[

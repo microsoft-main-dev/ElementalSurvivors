@@ -212,9 +212,24 @@ local function handle(player: Player, action: string, target: string?, extra: un
 		return
 	end
 
+	--[[
+		У колеса сообщение шлётся ТОЛЬКО при отказе.
+
+		При успехе приз уже едет клиенту пакетом WheelResult, и панель называет
+		его сама — но лишь после того, как диск остановится. Всплывающее
+		сообщение приходило мгновенно и объявляло результат за девять секунд
+		до конца прокрутки, то есть убивало единственную интригу этой механики.
+
+		Это тот самый случай «второй канал для одного факта разъедется с первым»:
+		каналов было два, и разошлись они во времени.
+	]]
 	if action == "SpinWheel" then
-		local _, message = WheelService.Spin(player)
-		notify(player, message)
+		-- Часть отказов молчаливая (Spin возвращает nil вместо текста): игроку
+		-- нечего сказать, когда он просто нажал второй раз подряд.
+		local ok, message = WheelService.Spin(player)
+		if not ok and message then
+			notify(player, message)
+		end
 		return
 	end
 

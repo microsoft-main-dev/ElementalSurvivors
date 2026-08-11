@@ -21,6 +21,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Shop = require(Shared.Config.Shop)
 local UiKit = require(script.Parent.UiKit)
@@ -54,7 +55,9 @@ function ShopPanel.Build(parent: Instance, send: (action: string, target: string
 		for order, lot in Shop.Lots do
 			local accent = if lot.kind == "egg" then Palette.UI.accent else Palette.Element.Nature
 			local row = UiKit.Row(list, order, accent)
-			row.badge.Text = if lot.kind == "egg" then "10x" else "XP"
+			if not UiKit.RowIcon(row, Icons.Shop[lot.key]) then
+				row.badge.Text = if lot.kind == "egg" then "10x" else "XP"
+			end
 			row.title.Text = `{lot.displayName}  ·  {UiKit.FormatAmount(lot.price)} {lot.currency}`
 			row.subtitle.Text = lot.description
 

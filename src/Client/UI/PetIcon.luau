@@ -6,10 +6,14 @@
 	одинаково — круг цвета своей стихии, обводка цвета редкости, инициалы вида,
 	а под кругом звёзды его позиции на лестнице цветом своего этапа.
 
-	Ассетов нет и не будет (правило 4): круг рисуется скруглённым фреймом,
-	стихия — символом шрифта. Значки специально из основного диапазона юникода,
-	а не эмодзи: символ ★ в проекте уже рисуется, а эмодзи на части устройств
-	уезжает по базовой линии.
+	Картинка зверя приходит из Config/Icons. Пока её нет, в круге рисуются
+	инициалы вида, а у слота стихии — её значок; значки специально из основного
+	диапазона юникода, а не эмодзи: символ ★ в проекте уже рисуется, а эмодзи
+	на части устройств уезжает по базовой линии.
+
+	Кольцо редкости рисуется здесь и только здесь. В самих файлах рамки быть
+	не должно: у картинки она своя и не знает про нашу шкалу редкостей, а два
+	кольца на одной иконке скажут игроку разное.
 
 	Требование «любой питомец этой стихии» рисуется тем же кругом, но со значком
 	стихии вместо инициалов: слот обозначает не конкретного питомца, а условие,
@@ -26,6 +30,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
 local Types = require(Shared.Types)
@@ -104,9 +109,9 @@ end
 --[[
 	Общий каркас: круг заданного размера плюс строка звёзд под ним.
 
-	glyph — то, что написано в круге (инициалы вида или значок стихии),
-	accent — цвет круга, ring — цвет обводки (редкость; nil у слота стихии,
-	у которого редкости нет).
+	assetId — картинка зверя (или значка стихии), glyph — чем её заменить,
+	пока ассета нет, accent — цвет круга, ring — цвет обводки (редкость;
+	nil у слота стихии, у которого редкости нет).
 ]]
 local function build(
 	parent: Instance,
@@ -114,6 +119,7 @@ local function build(
 	size: number,
 	accent: Color3,
 	ring: Color3?,
+	assetId: number?,
 	glyph: string,
 	stars: number?
 ): Icon
@@ -130,7 +136,27 @@ local function build(
 	stroke.Transparency = if ring then 0 else 0.4
 	stroke.Parent = body
 
-	local label = UiKit.Label(body, "Glyph", glyph, math.floor(size * 0.42), Palette.UI.background)
+	--[[
+		Картинка не на весь круг: зверь, упирающийся в обводку редкости, читается
+		как обрезанный. Доля подобрана так, чтобы поля хватало и на кружке в 44
+		пикселя (строка списка), и на 56 (подробности).
+
+		Под картинкой круг ПЕРЕКРАШИВАЕТСЯ В НЕЙТРАЛЬНЫЙ. Зверь нарисован цветом
+		своей стихии — ровно тем же, каким красится круг, — и на нём он попросту
+		исчезает: огненный лис #E2603A на огненном круге #E2603A это один
+		сплошной оранжевый блин. Стихию теперь несёт сама картинка, редкость —
+		обводка, и дублировать стихию фоном больше не нужно.
+	]]
+	local image = UiKit.Image(body, "Image", assetId)
+	if image then
+		body.BackgroundColor3 = Palette.UI.slot
+		image.AnchorPoint = Vector2.new(0.5, 0.5)
+		image.Position = UDim2.fromScale(0.5, 0.5)
+		image.Size = UDim2.fromScale(0.82, 0.82)
+	end
+
+	local label =
+		UiKit.Label(body, "Glyph", if image then "" else glyph, math.floor(size * 0.42), Palette.UI.background)
 	label.Font = Enum.Font.GothamBold
 	label.Size = UDim2.fromScale(1, 1)
 	label.TextXAlignment = Enum.TextXAlignment.Center
@@ -170,6 +196,10 @@ local function build(
 			label.TextTransparency = if dim then 0.5 else 0
 			stroke.Transparency = if dim then 0.75 else (if ring then 0 else 0.4)
 
+			if image then
+				image.ImageTransparency = if dim then 0.5 else 0
+			end
+
 			local text = starsLabel
 			if text then
 				text.TextTransparency = if dim then 0.5 else 0
@@ -195,7 +225,7 @@ end
 function PetIcon.Pet(parent: Instance, name: string, petId: string, stars: number?, size: number): Icon
 	local def = Pets.ByKey[petId]
 	if not def then
-		return build(parent, name, size, Palette.UI.panel, nil, "?", stars)
+		return build(parent, name, size, Palette.UI.panel, nil, nil, "?", stars)
 	end
 
 	return build(
@@ -204,13 +234,23 @@ function PetIcon.Pet(parent: Instance, name: string, petId: string, stars: numbe
 		size,
 		Palette.Element[def.element],
 		Palette.Rarity[def.rarity],
+		Icons.Pets[petId],
 		initials(def.displayName),
 		stars
 	)
 end
 
 function PetIcon.Element(parent: Instance, name: string, element: Types.Element, stars: number?, size: number): Icon
-	return build(parent, name, size, Palette.Element[element], nil, ELEMENT_GLYPH[element] or "?", stars)
+	return build(
+		parent,
+		name,
+		size,
+		Palette.Element[element],
+		nil,
+		Icons.Elements[element],
+		ELEMENT_GLYPH[element] or "?",
+		stars
+	)
 end
 
 return PetIcon

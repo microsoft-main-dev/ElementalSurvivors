@@ -63,7 +63,7 @@ local definitions: { PetDef } = {
 	{
 		key = "MossSprout",
 		typeId = 0,
-		displayName = "Moss Sprout",
+		displayName = "Sprout Turtle",
 		description = "Starts you with Thorn Aura. Pulls crystals from further away.",
 		rarity = "B",
 		element = "Nature",
@@ -77,7 +77,7 @@ local definitions: { PetDef } = {
 	{
 		key = "SparkKit",
 		typeId = 0,
-		displayName = "Spark Kit",
+		displayName = "Spark Mouse",
 		description = "Starts you with Storm Nova. Built for speed.",
 		rarity = "A",
 		element = "Lightning",
@@ -89,7 +89,7 @@ local definitions: { PetDef } = {
 	{
 		key = "DuskMoth",
 		typeId = 0,
-		displayName = "Dusk Moth",
+		displayName = "Shade Bat",
 		description = "Starts you with Shadow Needles. Wide crystal pickup.",
 		rarity = "A",
 		element = "Dark",
@@ -101,7 +101,7 @@ local definitions: { PetDef } = {
 	{
 		key = "GlowFinch",
 		typeId = 0,
-		displayName = "Glow Finch",
+		displayName = "Halo Chick",
 		description = "Starts you with Light Burst. Tougher than it looks.",
 		rarity = "A",
 		element = "Light",
@@ -115,7 +115,7 @@ local definitions: { PetDef } = {
 	{
 		key = "MagmaHound",
 		typeId = 0,
-		displayName = "Magma Hound",
+		displayName = "Flare Fox",
 		description = "Fire Halo starter. Fire abilities hit noticeably harder.",
 		rarity = "S",
 		element = "Fire",
@@ -141,7 +141,7 @@ local definitions: { PetDef } = {
 	{
 		key = "StormDrake",
 		typeId = 0,
-		displayName = "Storm Drake",
+		displayName = "Volt Hare",
 		description = "Storm Nova starter. Lightning damage soars.",
 		rarity = "SS",
 		element = "Lightning",
@@ -153,7 +153,7 @@ local definitions: { PetDef } = {
 	{
 		key = "VoidLynx",
 		typeId = 0,
-		displayName = "Void Lynx",
+		displayName = "Nightling",
 		description = "Shadow Needles starter. Dark damage soars.",
 		rarity = "SS",
 		element = "Dark",
@@ -167,7 +167,7 @@ local definitions: { PetDef } = {
 	{
 		key = "SolarPhoenix",
 		typeId = 0,
-		displayName = "Solar Phoenix",
+		displayName = "Sunling",
 		description = "Light Burst starter. Light damage is overwhelming.",
 		rarity = "SSS",
 		element = "Light",
@@ -179,7 +179,7 @@ local definitions: { PetDef } = {
 	{
 		key = "VerdantWarden",
 		typeId = 0,
-		displayName = "Verdant Warden",
+		displayName = "Moss Deer",
 		description = "Thorn Aura starter. Nature damage is overwhelming.",
 		rarity = "SSS",
 		element = "Nature",

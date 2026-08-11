@@ -44,6 +44,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Talents = require(Shared.Config.Talents)
 local Types = require(Shared.Types)
@@ -455,6 +456,21 @@ function TalentsPanel.Build(parent: Instance, send: (action: string, target: str
 			button.Text = ""
 			UiKit.Corners(button, size // 2)
 
+			--[[
+				Значок вида эффекта — только на крупных узлах. Точка занимает
+				22 пикселя, и картинка в ней превращается в кашу; там смысл несёт
+				сама заливка кружка, а подробности всё равно читают в описании.
+			]]
+			local icon = if node.kind ~= "Minor"
+				then UiKit.Image(button, "Icon", Icons.Talents[node.effect.kind])
+				else nil
+			if icon then
+				icon.AnchorPoint = Vector2.new(0.5, 0.5)
+				icon.Position = UDim2.fromScale(0.5, 0.5)
+				icon.Size = UDim2.fromScale(0.62, 0.62)
+				icon.ImageColor3 = Palette.UI.background
+			end
+
 			-- Обводка выбранного узла. Создаётся сразу выключенной: заводить
 			-- объекты на ходу в чужом слое — это мигание при первом касании.
 			local stroke = Instance.new("UIStroke")
@@ -473,6 +489,22 @@ function TalentsPanel.Build(parent: Instance, send: (action: string, target: str
 				counter.Font = Enum.Font.GothamBold
 				counter.Size = UDim2.fromScale(1, 1)
 				counter.TextXAlignment = Enum.TextXAlignment.Center
+
+				--[[
+					Под значком счётчик уезжает вниз-вправо и обзаводится
+					обводкой: по центру он лёг бы прямо на картинку, и не
+					прочиталось бы ни то, ни другое.
+				]]
+				if icon then
+					counter.AnchorPoint = Vector2.new(1, 1)
+					counter.Position = UDim2.new(1, 1, 1, 2)
+					counter.Size = UDim2.fromOffset(14, 14)
+					counter.TextSize = 12
+					counter.TextColor3 = Palette.UI.text
+					counter.TextStrokeColor3 = Palette.UI.background
+					counter.TextStrokeTransparency = 0
+				end
+
 				counters[node.id] = counter
 			end
 

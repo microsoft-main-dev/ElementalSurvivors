@@ -34,6 +34,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Eggs = require(Shared.Config.Eggs)
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Pets = require(Shared.Config.Pets)
 local Types = require(Shared.Types)
@@ -128,15 +129,10 @@ function EggsPanel.Build(parent: Instance, send: (action: string, target: string
 
 		local color = Color3.fromHex(egg.color)
 
-		if egg.imageAssetId > 0 then
-			local image = Instance.new("ImageLabel")
-			image.Name = "Image"
-			image.BackgroundTransparency = 1
-			image.ScaleType = Enum.ScaleType.Fit
-			image.Image = `rbxassetid://{egg.imageAssetId}`
+		local image = UiKit.Image(holder, "Image", Icons.Eggs[egg.key])
+		if image then
 			image.Position = UDim2.fromOffset(8, 8)
 			image.Size = UDim2.fromOffset(IMAGE_HEIGHT - 16, IMAGE_HEIGHT - 16)
-			image.Parent = holder
 		else
 			-- Заглушка вместо картинки: цвет яйца и его буква. Ассета ещё нет,
 			-- а панель должна выглядеть законченной уже сейчас.
@@ -160,6 +156,7 @@ function EggsPanel.Build(parent: Instance, send: (action: string, target: string
 			встаёт в один ряд с покупкой, оттуда вываливается.
 		]]
 		local back = UiKit.Button(holder, "Back", "All eggs", Palette.UI.panel)
+		UiKit.ButtonIcon(back, Icons.Ui.Back, 18)
 		back.AnchorPoint = Vector2.new(1, 0)
 		back.Position = UDim2.new(1, -8, 0, 8)
 		back.Size = UDim2.fromOffset(96, UiKit.ButtonHeight - 12)
@@ -228,7 +225,17 @@ function EggsPanel.Build(parent: Instance, send: (action: string, target: string
 		row.badge.TextColor3 = if known then Palette.UI.background else Palette.UI.subtext
 
 		if known then
-			row.title.Text = def.displayName
+			--[[
+				Портрет ставится только полученному питомцу: у неполученного
+				строка — силуэт, и картинка выдала бы ровно то, ради чего это
+				яйцо и покупают. Редкость тогда переезжает в заголовок, потому
+				что её место заняло изображение.
+			]]
+			if UiKit.RowIcon(row, Icons.Pets[def.key]) then
+				row.title.Text = `{def.displayName}  ·  {def.rarity}`
+			else
+				row.title.Text = def.displayName
+			end
 			row.subtitle.Text = def.description
 		else
 			-- Силуэт: видно редкость и шанс, не видно кто это.
@@ -251,7 +258,10 @@ function EggsPanel.Build(parent: Instance, send: (action: string, target: string
 		for order, egg in Eggs.List do
 			local row = UiKit.Row(list, order, Color3.fromHex(egg.color))
 			row.frame.Size = UDim2.new(1, -8, 0, UiKit.RowHeight + 10)
-			row.badge.Text = if egg.currency == "essence" then "E" else "P"
+			-- Буква валюты не теряется: она же стоит в заголовке рядом с ценой.
+			if not UiKit.RowIcon(row, Icons.Eggs[egg.key]) then
+				row.badge.Text = if egg.currency == "essence" then "E" else "P"
+			end
 			row.title.Text = `{egg.displayName}  ·  {UiKit.FormatAmount(egg.price)} {egg.currency}`
 			row.subtitle.Text = chanceText(egg)
 

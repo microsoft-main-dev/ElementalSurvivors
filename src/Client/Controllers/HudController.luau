@@ -19,6 +19,7 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
 local BossRenderController = require(script.Parent.BossRenderController)
+local Icons = require(Shared.Config.Icons)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
 local SettingsController = require(script.Parent.SettingsController)
@@ -78,6 +79,8 @@ local function makeBar(parent: Instance, name: string, color: Color3): (Frame, F
 	corner.CornerRadius = UDim.new(0, 4)
 	corner.Parent = track
 
+	UiKit.Skin(track, "BarBackground")
+
 	local fill = Instance.new("Frame")
 	fill.Name = "Fill"
 	fill.Size = UDim2.fromScale(0, 1)
@@ -88,6 +91,16 @@ local function makeBar(parent: Instance, name: string, color: Color3): (Frame, F
 	local fillCorner = Instance.new("UICorner")
 	fillCorner.CornerRadius = UDim.new(0, 4)
 	fillCorner.Parent = fill
+
+	--[[
+		Заливка красится в цвет полосы через ImageColor3: картинка почти белая
+		и одна на здоровье, опыт и полосу босса. Без покраски все три стали бы
+		одинаково белыми, и полоса перестала бы что-либо сообщать.
+	]]
+	local fillSkin = UiKit.Skin(fill, "BarFill")
+	if fillSkin then
+		fillSkin.ImageColor3 = color
+	end
 
 	return track, fill
 end
@@ -259,6 +272,19 @@ local function getIcon(key: string, order: number): Icon
 	corner.CornerRadius = UDim.new(0, 8)
 	corner.Parent = holder
 
+	--[[
+		Картинка создаётся ДО заливки кулдауна: в Roblox позже добавленный
+		потомок рисуется поверх, и иконка, вставленная последней, закрыла бы
+		собой кулдаун — самое важное, что есть на этой иконке в бою.
+
+		У картинки своя плитка, поэтому подложка гасится: иначе цвет стихии
+		торчал бы каймой по скруглённым углам.
+	]]
+	local image = UiKit.Image(holder, "Image", Icons.Abilities[key])
+	if image then
+		holder.BackgroundTransparency = 1
+	end
+
 	-- Кулдаун закрашивает иконку снизу вверх.
 	local cooldown = Instance.new("Frame")
 	cooldown.Name = "Cooldown"
@@ -275,7 +301,7 @@ local function getIcon(key: string, order: number): Icon
 	name.Size = UDim2.fromScale(1, 0.6)
 	name.BackgroundTransparency = 1
 	name.Font = Enum.Font.GothamBold
-	name.Text = if def then string.sub(def.displayName, 1, 2) else "?"
+	name.Text = if image then "" elseif def then string.sub(def.displayName, 1, 2) else "?"
 	name.TextColor3 = Palette.UI.background
 	name.TextScaled = true
 	name.Parent = holder

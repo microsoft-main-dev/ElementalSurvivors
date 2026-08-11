@@ -21,6 +21,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.UiKit)
@@ -218,17 +219,38 @@ function DailyPanel.Build(parent: Instance, send: (action: string, target: strin
 	hub.Size = UDim2.fromOffset(WHEEL_HUB_RADIUS * 2, WHEEL_HUB_RADIUS * 2)
 	UiKit.Corners(hub, WHEEL_HUB_RADIUS)
 
-	local hubLabel = UiKit.Label(hub, "Text", "Essence", 13, Palette.UI.subtext)
-	hubLabel.Size = UDim2.fromScale(1, 1)
-	hubLabel.TextXAlignment = Enum.TextXAlignment.Center
+	--[[
+		В ступице либо картинка приза, либо слово «Essence». Всё, что раздаёт
+		колесо, — это Essence, поэтому картинка одна на все секторы: подписывать
+		каждый сектор ещё и значком значило бы повторить одно и то же
+		восемь раз по кругу.
+	]]
+	local hubImage = UiKit.Image(hub, "Icon", Icons.Misc.WheelPrize)
+	if hubImage then
+		hubImage.AnchorPoint = Vector2.new(0.5, 0.5)
+		hubImage.Position = UDim2.fromScale(0.5, 0.5)
+		hubImage.Size = UDim2.fromScale(0.7, 0.7)
+	else
+		local hubLabel = UiKit.Label(hub, "Text", "Essence", 13, Palette.UI.subtext)
+		hubLabel.Size = UDim2.fromScale(1, 1)
+		hubLabel.TextXAlignment = Enum.TextXAlignment.Center
+	end
 
 	-- Указатель сверху, вне диска: он не должен вращаться вместе с ним.
-	local pointer = UiKit.Label(wheelHolder, "Pointer", "▼", 30, Palette.UI.danger)
-	pointer.AnchorPoint = Vector2.new(0.5, 0)
-	pointer.Position = UDim2.fromScale(0.5, 0)
-	pointer.Size = UDim2.fromOffset(40, 34)
-	pointer.TextXAlignment = Enum.TextXAlignment.Center
-	pointer.ZIndex = 3
+	local pointerImage = UiKit.Image(wheelHolder, "Pointer", Icons.Ui.Pointer)
+	if pointerImage then
+		pointerImage.AnchorPoint = Vector2.new(0.5, 0)
+		pointerImage.Position = UDim2.fromScale(0.5, 0)
+		pointerImage.Size = UDim2.fromOffset(32, 36)
+		pointerImage.ZIndex = 3
+	else
+		local pointer = UiKit.Label(wheelHolder, "Pointer", "▼", 30, Palette.UI.danger)
+		pointer.AnchorPoint = Vector2.new(0.5, 0)
+		pointer.Position = UDim2.fromScale(0.5, 0)
+		pointer.Size = UDim2.fromOffset(40, 34)
+		pointer.TextXAlignment = Enum.TextXAlignment.Center
+		pointer.ZIndex = 3
+	end
 
 	local section = "Quests"
 	local questsView: Types.QuestsView? = nil

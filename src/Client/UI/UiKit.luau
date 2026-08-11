@@ -14,7 +14,9 @@
 
 local Workspace = game:GetService("Workspace")
 
-local Palette = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared").Config.Palette)
+local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
+local Palette = require(Shared.Config.Palette)
 
 local UiKit = {}
 
@@ -120,6 +122,38 @@ function UiKit.Frame(parent: Instance, name: string, color: Color3?): Frame
 	return frame
 end
 
+--[[
+	Картинка по Asset ID — или nil, если ассета нет.
+
+	Возвращаемый nil и есть тот самый «ноль означает ассета нет» из Config/Icons:
+	вызывающий по нему рисует прежнюю заглушку. Проверка живёт здесь, чтобы
+	девять панелей не написали её девять раз и не разошлись в мелочах.
+
+	Растягивается на весь родитель. Кому нужен отступ — задаёт размер сам:
+	у ячейки инвентаря и у метки строки они разные.
+]]
+function UiKit.Image(parent: Instance, name: string, assetId: number?): ImageLabel?
+	local asset = Icons.Image(assetId)
+	if not asset then
+		return nil
+	end
+
+	local image = Instance.new("ImageLabel")
+	image.Name = name
+	image.BackgroundTransparency = 1
+	image.BorderSizePixel = 0
+	image.Image = asset
+	--[[
+		Fit, а не Stretch: часть картинок квадратная, часть (баннер локации) нет,
+		и растянутая по ячейке иконка — единственный способ испортить любой,
+		даже хорошо нарисованный ассет.
+	]]
+	image.ScaleType = Enum.ScaleType.Fit
+	image.Size = UDim2.fromScale(1, 1)
+	image.Parent = parent
+	return image
+end
+
 function UiKit.Label(parent: Instance, name: string, text: string, size: number, color: Color3?): TextLabel
 	local label = Instance.new("TextLabel")
 	label.Name = name
@@ -149,6 +183,66 @@ function UiKit.Button(parent: Instance, name: string, text: string, color: Color
 	UiKit.Corners(button, 8)
 
 	--[[
+		Скин кнопки. Цвет при этом теряется — и это осознанно: в новом стиле
+		кнопка одна на всё, а смысл несут значок и подпись. Чем отличается
+		нажатая и недоступная, говорят отдельные картинки, а не оттенок.
+
+		AutoButtonColor выключается: он подсвечивает ФОН, а фон стал прозрачным,
+		и подсветка просто перестала бы работать, тихо и незаметно.
+	]]
+	if UiKit.Skin(button, "ButtonNormal") then
+		button.AutoButtonColor = false
+
+		--[[
+			Подпись переезжает в отдельный ярлык, а собственная гасится.
+
+			Иначе её не видно вовсе: подложка скина — ПОТОМОК кнопки, а потомок
+			в Roblox рисуется поверх текста своего родителя. Так и пропали
+			все надписи разом, включая крестик окна.
+
+			Снаружи при этом ничего не меняется: код по-прежнему пишет
+			button.Text, а ярлык повторяет за ним. Менять публичный вызов было
+			нельзя — текст кнопкам задают в семи местах уже после создания.
+		]]
+		local label = UiKit.Label(button, "Label", text, button.TextSize, button.TextColor3)
+		label.Font = button.Font
+		label.Size = UDim2.fromScale(1, 1)
+		label.TextXAlignment = Enum.TextXAlignment.Center
+		button.TextTransparency = 1
+
+		button:GetPropertyChangedSignal("Text"):Connect(function()
+			label.Text = button.Text
+		end)
+		button:GetPropertyChangedSignal("TextSize"):Connect(function()
+			label.TextSize = button.TextSize
+		end)
+		button:GetPropertyChangedSignal("TextColor3"):Connect(function()
+			label.TextColor3 = button.TextColor3
+		end)
+
+		--[[
+			Замок SkinLocked ставят те, у кого своя картинка состояния: вкладка
+			и чип. Без него нажатие подменило бы их скин на кнопочный, и активная
+			вкладка после первого же клика стала бы обычной кнопкой.
+		]]
+		button.MouseButton1Down:Connect(function()
+			if button.Active and not button:GetAttribute("SkinLocked") then
+				UiKit.SetSkin(button, "ButtonPressed")
+			end
+		end)
+
+		local function release()
+			if button:GetAttribute("SkinLocked") then
+				return
+			end
+			UiKit.SetSkin(button, if button.Active then "ButtonNormal" else "ButtonDisabled")
+		end
+
+		button.MouseButton1Up:Connect(release)
+		button.MouseLeave:Connect(release)
+	end
+
+	--[[
 		Звук клика централизован здесь: у проекта девять с лишним панелей,
 		и заводить его в каждой по отдельности значило бы девять раз забыть
 		один клик. require ленивый (внутри обработчика, а не в шапке модуля):
@@ -165,16 +259,184 @@ function UiKit.Button(parent: Instance, name: string, text: string, color: Color
 end
 
 --[[
+	Геометрия нарезки скина.
+
+	inset — сколько пикселей ИСХОДНИКА занимает угол; всё, что внутри, тянется.
+	Числа измерены по самим файлам, а не подобраны: у каждого куска свой радиус
+	скругления, и общей константы тут быть не может.
+
+	scale — во сколько раз ужать куски при отрисовке. Углы 9-slice рисуются в
+	натуральную величину, а исходники разного масштаба: у полосы здоровья угол
+	120 пикселей при высоте полосы в 16, и без ужатия она превратилась бы
+	в два налезающих друг на друга торца.
+]]
+type SkinPart = { width: number, height: number, inset: number, scale: number }
+
+--[[
+	width/height — размеры самого файла. Без них нельзя посчитать SliceCenter:
+	он задаётся координатами прямоугольника от левого верхнего угла, а не
+	отступами с четырёх сторон, и правая граница считается как width - inset.
+
+	Отступ обязан быть не больше половины меньшей стороны, иначе прямоугольник
+	вывернется наизнанку.
+]]
+local SKIN: { [string]: SkinPart } = {
+	FrameWindow = { width = 179, height = 185, inset = 22, scale = 1 },
+	FrameRow = { width = 117, height = 122, inset = 14, scale = 1 },
+	FrameSlot = { width = 120, height = 126, inset = 34, scale = 0.5 },
+	-- Три состояния кнопки нарезаются одинаково, хотя рисунки чуть разные:
+	-- иначе кнопка дёргалась бы геометрией в момент нажатия.
+	ButtonNormal = { width = 110, height = 67, inset = 22, scale = 0.6 },
+	ButtonPressed = { width = 113, height = 69, inset = 22, scale = 0.6 },
+	ButtonDisabled = { width = 110, height = 67, inset = 22, scale = 0.6 },
+	TabActive = { width = 1869, height = 472, inset = 70, scale = 0.2 },
+	TabIdle = { width = 1747, height = 447, inset = 45, scale = 0.31 },
+	BarBackground = { width = 1776, height = 308, inset = 110, scale = 0.055 },
+	BarFill = { width = 1980, height = 292, inset = 140, scale = 0.045 },
+}
+
+local function sliceRect(part: SkinPart): Rect
+	return Rect.new(part.inset, part.inset, part.width - part.inset, part.height - part.inset)
+end
+
+--[[
+	Растягиваемая подложка из Config/Icons.Skin.
+
+	Кладётся первым потомком, чтобы всё остальное рисовалось поверх, и не
+	перехватывает ввод: клики должны доставаться самой кнопке.
+
+	Pixelated обязателен. Скин нарисован пиксель-артом, и середина у него
+	растягивается в разы; билинейная фильтрация превратила бы её в мыло.
+]]
+function UiKit.Skin(parent: GuiObject, key: string): ImageLabel?
+	local part = SKIN[key]
+	local image = UiKit.Image(parent, "Skin", Icons.Skin[key])
+	if not image or not part then
+		if image then
+			image:Destroy()
+		end
+		return nil
+	end
+
+	image.ScaleType = Enum.ScaleType.Slice
+	image.SliceCenter = sliceRect(part)
+	image.SliceScale = part.scale
+	image.ResampleMode = Enum.ResamplerMode.Pixelated
+	image.Size = UDim2.fromScale(1, 1)
+	image.ZIndex = 0
+	image.Active = false
+	parent.BackgroundTransparency = 1
+	return image
+end
+
+--[[
+	Смена картинки у уже созданной подложки: нажатие кнопки, переключение вкладки.
+	Молчит, если скина нет, — тогда вызывающий красит фон цветом, как раньше.
+]]
+function UiKit.SetSkin(holder: GuiObject, key: string): ()
+	local image = holder:FindFirstChild("Skin")
+	local part = SKIN[key]
+	local asset = Icons.Image(Icons.Skin[key])
+	if image and image:IsA("ImageLabel") and part and asset then
+		image.Image = asset
+		image.SliceCenter = sliceRect(part)
+		image.SliceScale = part.scale
+	end
+end
+
+-- Есть ли вообще скин: по этому вызывающий решает, красить ли фон цветом.
+function UiKit.HasSkin(key: string): boolean
+	return SKIN[key] ~= nil and Icons.Skin[key] > 0
+end
+
+--[[
+	Значок внутри кнопки.
+
+	С подписью значок встаёт слева, а текст отодвигается вправо ровно на его
+	ширину: считать это снаружи нельзя — размер значка знает только эта функция.
+	Без подписи (крестик окна, стрелка возврата) значок занимает центр.
+
+	Возвращает false, если ассета нет: кнопка тогда остаётся такой, какой была.
+]]
+function UiKit.ButtonIcon(button: TextButton, assetId: number?, size: number?): boolean
+	local image = UiKit.Image(button, "Icon", assetId)
+	if not image then
+		return false
+	end
+
+	local side = size or 26
+	image.Size = UDim2.fromOffset(side, side)
+
+	local text = button.Text
+	if text == "" then
+		image.AnchorPoint = Vector2.new(0.5, 0.5)
+		image.Position = UDim2.fromScale(0.5, 0.5)
+		return true
+	end
+
+	image.AnchorPoint = Vector2.new(0, 0.5)
+	image.Position = UDim2.new(0, 8, 0.5, 0)
+
+	--[[
+		Подпись живёт отдельным ярлыком и отодвигается вправо от значка.
+
+		UIPadding здесь НЕ ГОДИТСЯ, и это уже было багом: в Roblox он сдвигает
+		не только текст, но и всех потомков сразу — то есть значок уезжал ровно
+		на ту величину, на которую мы отодвигали от него подпись, и ложился
+		поверх неё.
+
+		У кнопки со скином ярлык уже создан — его и двигаем. Заводить второй
+		с тем же именем нельзя: искать их потом будут по имени.
+	]]
+	local existing = button:FindFirstChild("Label")
+	local label: TextLabel
+	if existing and existing:IsA("TextLabel") then
+		label = existing
+	else
+		button.Text = ""
+		label = UiKit.Label(button, "Label", text, button.TextSize, button.TextColor3)
+		label.Font = button.Font
+	end
+
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Position = UDim2.fromOffset(8 + side + 6, 0)
+	label.Size = UDim2.new(1, -(8 + side + 12), 1, 0)
+	return true
+end
+
+--[[
 	Кнопка, которую нельзя нажать (не хватает валюты, максимальный уровень).
 
 	Гасится цветом и прозрачностью, а не исчезает: пропавшая кнопка читается как
 	ошибка интерфейса, а погашенная — как «пока нельзя», и объясняет сама себя.
 ]]
 function UiKit.SetEnabled(button: TextButton, enabled: boolean): ()
-	button.AutoButtonColor = enabled
-	button.BackgroundTransparency = if enabled then 0 else 0.6
 	button.TextTransparency = if enabled then 0 else 0.5
 	button.Active = enabled
+
+	if UiKit.HasSkin("ButtonNormal") then
+		-- Со скином прозрачность фона трогать нельзя: фон и так прозрачный,
+		-- а недоступность показывает своя картинка.
+		UiKit.SetSkin(button, if enabled then "ButtonNormal" else "ButtonDisabled")
+	else
+		button.AutoButtonColor = enabled
+		button.BackgroundTransparency = if enabled then 0 else 0.6
+	end
+
+	--[[
+		У кнопки со значком подпись живёт в отдельном ярлыке, и собственный
+		TextTransparency её не гасит. Без этого погашенная кнопка выглядела бы
+		наполовину активной.
+	]]
+	local label = button:FindFirstChild("Label")
+	if label and label:IsA("TextLabel") then
+		label.TextTransparency = if enabled then 0 else 0.5
+	end
+
+	local icon = button:FindFirstChild("Icon")
+	if icon and icon:IsA("ImageLabel") then
+		icon.ImageTransparency = if enabled then 0 else 0.5
+	end
 end
 
 function UiKit.Scroll(parent: Instance, name: string): ScrollingFrame
@@ -184,6 +446,20 @@ function UiKit.Scroll(parent: Instance, name: string): ScrollingFrame
 	scroll.BorderSizePixel = 0
 	scroll.ScrollBarThickness = 4
 	scroll.ScrollBarImageColor3 = Palette.UI.accent
+
+	--[[
+		Ползунок собирается из ТРЁХ картинок, свойства «одна картинка ползунка»
+		у ScrollingFrame нет вовсе. И трогать их можно только когда ассет есть:
+		по умолчанию там лежат встроенные rbxasset-пути, и запись пустой строки
+		не вернула бы стандартный вид, а стёрла бы ползунок.
+	]]
+	local scrollbar = Icons.Image(Icons.Ui.Scrollbar)
+	if scrollbar then
+		scroll.TopImage = scrollbar
+		scroll.MidImage = scrollbar
+		scroll.BottomImage = scrollbar
+	end
+
 	scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	scroll.CanvasSize = UDim2.new()
 	scroll.Parent = parent
@@ -264,6 +540,7 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	]]
 	panel.Active = true
 	UiKit.Corners(panel, 14)
+	UiKit.Skin(panel, "FrameWindow")
 
 	--[[
 		Закрытие по клику мимо окна — именно КЛИКОМ, а не отпусканием кнопки.
@@ -319,6 +596,12 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	close.AnchorPoint = Vector2.new(1, 0)
 	close.Position = UDim2.fromScale(1, 0)
 	close.Size = UDim2.fromOffset(UiKit.ButtonHeight, UiKit.ButtonHeight)
+	-- Текст гасится ДО значка: по пустой подписи ButtonIcon понимает,
+	-- что кнопка одноиконочная, и ставит картинку по центру.
+	if Icons.Ui.Close > 0 then
+		close.Text = ""
+		UiKit.ButtonIcon(close, Icons.Ui.Close, 22)
+	end
 	close.Activated:Connect(function()
 		screen.Enabled = false
 	end)
@@ -349,6 +632,7 @@ function UiKit.Row(parent: Instance, order: number, accent: Color3): Row
 	frame.Size = UDim2.new(1, -8, 0, UiKit.RowHeight)
 	frame.BackgroundTransparency = 0.3
 	UiKit.Corners(frame, 8)
+	UiKit.Skin(frame, "FrameRow")
 
 	local badge = Instance.new("TextLabel")
 	badge.Name = "Badge"
@@ -387,6 +671,28 @@ function UiKit.Row(parent: Instance, order: number, accent: Color3): Row
 	layout.Parent = actions
 
 	return { frame = frame, badge = badge, title = title, subtitle = subtitle, actions = actions }
+end
+
+--[[
+	Картинка в метке строки вместо её подписи.
+
+	Метка остаётся цветной подложкой: у части иконок фон прозрачный, и без
+	подложки они висели бы в пустоте. Отступ обязателен — иконка, упирающаяся
+	в скруглённый угол, срезается им.
+
+	Возвращает false, если ассета нет: вызывающий тогда оставляет свою подпись
+	(«10x», «R$») и строка выглядит ровно как до картинок.
+]]
+function UiKit.RowIcon(row: Row, assetId: number?): boolean
+	local image = UiKit.Image(row.badge, "Icon", assetId)
+	if not image then
+		return false
+	end
+
+	row.badge.Text = ""
+	image.Size = UDim2.new(1, -8, 1, -8)
+	image.Position = UDim2.fromOffset(4, 4)
+	return true
 end
 
 --[[
@@ -436,12 +742,17 @@ function UiKit.Slot(parent: Instance, name: string, order: number): TextButton
 	slot.Parent = parent
 	UiKit.Corners(slot, 8)
 
+	--[[
+		Обводка остаётся и со скином: ею панель показывает выделенную ячейку,
+		меняя цвет. Рамка из картинки этого не умеет — она одна на все ячейки.
+	]]
 	local stroke = Instance.new("UIStroke")
 	stroke.Name = "Border"
 	stroke.Color = Palette.UI.panel
 	stroke.Thickness = 2
 	stroke.Parent = slot
 
+	UiKit.Skin(slot, "FrameSlot")
 	return slot
 end
 
@@ -458,6 +769,17 @@ function UiKit.Chip(parent: Instance, name: string, text: string, width: number,
 	chip.Size = UDim2.fromOffset(width, UiKit.ChipHeight)
 	chip.TextSize = 12
 	chip.TextTransparency = if active then 0 else 0.2
+
+	--[[
+		Со скином цвет чипа перестаёт что-либо значить, поэтому выбранность
+		показывают разные картинки: обычная кнопка против погашенной. Замок
+		нужен, чтобы нажатие не сбросило это обратно.
+	]]
+	if UiKit.HasSkin("ButtonNormal") then
+		chip:SetAttribute("SkinLocked", true)
+		UiKit.SetSkin(chip, if active then "ButtonNormal" else "ButtonDisabled")
+	end
+
 	return chip
 end
 
@@ -485,12 +807,18 @@ function UiKit.Tabs(parent: Instance, names: { string }, onSelect: (name: string
 	local buttons: { [string]: TextButton } = {}
 	local current = names[1] or ""
 
+	local skinned = UiKit.HasSkin("TabActive")
+
 	local tabs: Tabs
 	local function paint(): ()
 		for name, button in buttons do
 			local active = name == current
-			button.BackgroundColor3 = if active then Palette.UI.accent else Palette.UI.background
 			button.TextTransparency = if active then 0 else 0.25
+			if skinned then
+				UiKit.SetSkin(button, if active then "TabActive" else "TabIdle")
+			else
+				button.BackgroundColor3 = if active then Palette.UI.accent else Palette.UI.background
+			end
 		end
 	end
 
@@ -499,6 +827,9 @@ function UiKit.Tabs(parent: Instance, names: { string }, onSelect: (name: string
 		button.LayoutOrder = order
 		button.Size = UDim2.fromOffset(104, UiKit.TabHeight)
 		button.TextSize = 15
+		if skinned then
+			button:SetAttribute("SkinLocked", true)
+		end
 		button.Activated:Connect(function()
 			tabs.Select(name)
 		end)

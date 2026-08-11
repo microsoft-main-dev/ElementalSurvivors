@@ -4,8 +4,8 @@
 
 	Раздел 4 требует «провести по объектам»: подсказки текстом мало, новичок
 	не знает, где в лобби стоит портал. Стрелка висит над самим объектом
-	и покачивается — этого достаточно, чтобы её заметили, и на это не нужно
-	ни одного ассета (правило 4: всё визуальное — примитивы и текст).
+	и покачивается — этого достаточно, чтобы её заметили. Картинка приходит
+	из Config/Icons; пока её нет, рисуется текстовый треугольник.
 
 	Цель ищется по тому же атрибуту Panel на ProximityPrompt, по которому
 	LobbyController решает, какое окно открыть. Своего списка объектов
@@ -26,7 +26,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
-local Palette = require(ReplicatedStorage:WaitForChild("Shared").Config.Palette)
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
+local Palette = require(Shared.Config.Palette)
+local UiKit = require(script.Parent.UiKit)
 
 local HEIGHT_STUDS = 7 -- насколько выше центра детали висит стрелка
 local BOB_AMPLITUDE = 0.7
@@ -72,18 +75,21 @@ function TutorialArrow.Build(parent: Instance): Arrow
 	billboard.Enabled = false
 	billboard.Parent = parent
 
-	local glyph = Instance.new("TextLabel")
-	glyph.Name = "Glyph"
-	glyph.BackgroundTransparency = 1
-	glyph.Size = UDim2.fromScale(1, 1)
-	glyph.Font = Enum.Font.GothamBold
-	-- Текстовый треугольник вместо картинки: ассетов у проекта нет.
-	glyph.Text = "▼"
-	glyph.TextColor3 = Palette.UI.accent
-	glyph.TextScaled = true
-	glyph.TextStrokeColor3 = Palette.UI.background
-	glyph.TextStrokeTransparency = 0.2
-	glyph.Parent = billboard
+	local image = UiKit.Image(billboard, "Arrow", Icons.Misc.TutorialArrow)
+	if not image then
+		-- Пока картинки нет — текстовый треугольник.
+		local glyph = Instance.new("TextLabel")
+		glyph.Name = "Glyph"
+		glyph.BackgroundTransparency = 1
+		glyph.Size = UDim2.fromScale(1, 1)
+		glyph.Font = Enum.Font.GothamBold
+		glyph.Text = "▼"
+		glyph.TextColor3 = Palette.UI.accent
+		glyph.TextScaled = true
+		glyph.TextStrokeColor3 = Palette.UI.background
+		glyph.TextStrokeTransparency = 0.2
+		glyph.Parent = billboard
+	end
 
 	local bob = 0
 	local connection: RBXScriptConnection? = nil

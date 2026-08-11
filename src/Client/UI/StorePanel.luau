@@ -25,6 +25,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
 local Palette = require(Shared.Config.Palette)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.UiKit)
@@ -68,7 +69,10 @@ function StorePanel.Build(parent: Instance): Panel
 		for _, boost in view.boosts do
 			order += 1
 			local row = UiKit.Row(list, order, Palette.Element.Light)
-			row.badge.Text = "ON"
+			-- «ON» без картинки не теряется: остаток времени всё равно в подписи.
+			if not UiKit.RowIcon(row, Icons.Consumables[boost.key]) then
+				row.badge.Text = "ON"
+			end
 			row.title.Text = boost.displayName
 			row.subtitle.Text = `Active for another {UiKit.FormatDuration(boost.secondsLeft)}`
 		end
@@ -76,15 +80,26 @@ function StorePanel.Build(parent: Instance): Panel
 		for _, charge in view.charges do
 			order += 1
 			local row = UiKit.Row(list, order, Palette.Element.Light)
-			row.badge.Text = `x{charge.count}`
-			row.title.Text = charge.displayName
+			--[[
+				Количество переезжает в заголовок, только если метку занял значок:
+				показывать «x3» в обоих местах разом — это два источника одного
+				числа, и однажды они разойдутся.
+			]]
+			if UiKit.RowIcon(row, Icons.Consumables[charge.key]) then
+				row.title.Text = `{charge.displayName}  ·  x{charge.count}`
+			else
+				row.badge.Text = `x{charge.count}`
+				row.title.Text = charge.displayName
+			end
 			row.subtitle.Text = "Spent automatically on your next finished run."
 		end
 
 		for _, product in view.products do
 			order += 1
 			local row = UiKit.Row(list, order, Palette.UI.accent)
-			row.badge.Text = "R$"
+			if not UiKit.RowIcon(row, Icons.Products[product.key]) then
+				row.badge.Text = "R$"
+			end
 			row.title.Text = product.displayName
 			row.subtitle.Text = if product.available
 				then product.description

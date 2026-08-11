@@ -16,9 +16,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
 local Types = require(Shared.Types)
+local UiKit = require(script.Parent.Parent.UI.UiKit)
 
 local PILL_HEIGHT = 32
 local PILL_WIDTH = 116
@@ -45,7 +47,7 @@ local function formatAmount(value: number): string
 	return result
 end
 
-local function makePill(parent: Instance, order: number, color: Color3): TextLabel
+local function makePill(parent: Instance, order: number, color: Color3, kind: Types.CurrencyKind): TextLabel
 	local pill = Instance.new("Frame")
 	pill.Name = `Pill{order}`
 	pill.LayoutOrder = order
@@ -59,19 +61,37 @@ local function makePill(parent: Instance, order: number, color: Color3): TextLab
 	corner.CornerRadius = UDim.new(0, PILL_HEIGHT // 2)
 	corner.Parent = pill
 
-	-- Валюту различает цвет кружка: иконок у нас нет и не будет до ассетов.
-	local dot = Instance.new("Frame")
-	dot.Name = "Dot"
-	dot.AnchorPoint = Vector2.new(0, 0.5)
-	dot.Position = UDim2.new(0, 8, 0.5, 0)
-	dot.Size = UDim2.fromOffset(14, 14)
-	dot.BackgroundColor3 = color
-	dot.BorderSizePixel = 0
-	dot.Parent = pill
+	-- Та же рамка, что у строк списков: плашка валюты — такой же элемент
+	-- интерфейса, и без рамки она выпадала из общего вида.
+	UiKit.Skin(pill, "FrameRow")
 
-	local dotCorner = Instance.new("UICorner")
-	dotCorner.CornerRadius = UDim.new(0.5, 0)
-	dotCorner.Parent = dot
+	--[[
+		Иконка валюты. Пока её нет — кружок цветом валюты: цена в этой строке
+		есть всегда, и без опознавательного знака рядом с числом непонятно,
+		о какой из двух валют речь.
+
+		Иконка крупнее кружка (20 против 14): у кружка вся работа — быть цветом,
+		а у картинки внутри есть форма, и на четырнадцати точках она пропадает.
+	]]
+	local image = UiKit.Image(pill, "Icon", Icons.Currency[kind])
+	if image then
+		image.AnchorPoint = Vector2.new(0, 0.5)
+		image.Position = UDim2.new(0, 6, 0.5, 0)
+		image.Size = UDim2.fromOffset(20, 20)
+	else
+		local dot = Instance.new("Frame")
+		dot.Name = "Dot"
+		dot.AnchorPoint = Vector2.new(0, 0.5)
+		dot.Position = UDim2.new(0, 8, 0.5, 0)
+		dot.Size = UDim2.fromOffset(14, 14)
+		dot.BackgroundColor3 = color
+		dot.BorderSizePixel = 0
+		dot.Parent = pill
+
+		local dotCorner = Instance.new("UICorner")
+		dotCorner.CornerRadius = UDim.new(0.5, 0)
+		dotCorner.Parent = dot
+	end
 
 	local label = Instance.new("TextLabel")
 	label.Name = "Amount"
@@ -114,8 +134,8 @@ local function build(): ()
 	layout.Padding = UDim.new(0, PILL_GAP)
 	layout.Parent = holder
 
-	essenceLabel = makePill(holder, 1, Palette.UI.accent)
-	prismsLabel = makePill(holder, 2, Palette.Element.Dark)
+	essenceLabel = makePill(holder, 1, Palette.UI.accent, "essence")
+	prismsLabel = makePill(holder, 2, Palette.Element.Dark, "prisms")
 end
 
 local function setVisible(visible: boolean): ()

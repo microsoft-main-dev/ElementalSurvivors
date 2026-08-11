@@ -2,11 +2,11 @@
 --[[
 	ItemIcon — иконка предмета в ячейке инвентаря.
 
-	Текстур у предметов нет (правило 4: ассеты только от владельца), поэтому
-	предмет — это цветной квадрат. Цвет говорит, ЧТО это: сталь шлема, кожа
-	нагрудника, тёмная кожа сапог, золото амулета (Palette.Gear). Редкость
-	добавляется поверх свечением, а не своим цветом: легендарные сапоги обязаны
-	остаться сапогами.
+	Картинка слота приходит из Config/Icons. Пока её нет, предмет — это цветной
+	квадрат, и цвет говорит, ЧТО это: сталь шлема, кожа нагрудника, тёмная кожа
+	сапог, золото амулета (Palette.Gear). Редкость в обоих случаях добавляется
+	поверх свечением, а не своим цветом: легендарные сапоги обязаны остаться
+	сапогами.
 
 	«Неон» в плоском интерфейсе — это обводка цвета редкости, градиент и, у
 	легендарных, медленная пульсация. Настоящего Neon-материала у GuiObject нет,
@@ -22,6 +22,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Icons = require(Shared.Config.Icons)
 local Items = require(Shared.Config.Items)
 local Palette = require(Shared.Config.Palette)
 local Types = require(Shared.Types)
@@ -71,17 +72,27 @@ function ItemIcon.Build(
 	local glow = GLOW[rarity] or GLOW.Common
 
 	--[[
-		Градиент сверху вниз даёт квадрату объём: без него он читается как
-		плашка интерфейса, а не как предмет. У обычных он слабее, у редких
-		сильнее — это второй, тихий признак редкости помимо обводки.
+		У картинки предмета своя плашка, поэтому подложка и градиент под ней
+		не нужны: они просвечивали бы по краям скругления цветной каймой.
+		Без картинки всё остаётся как было.
 	]]
-	local gradient = Instance.new("UIGradient")
-	gradient.Rotation = 90
-	gradient.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 150, 150)),
-	})
-	gradient.Parent = frame
+	local image = UiKit.Image(frame, "Image", Icons.Gear[slot])
+	if image then
+		frame.BackgroundTransparency = 1
+	else
+		--[[
+			Градиент сверху вниз даёт квадрату объём: без него он читается как
+			плашка интерфейса, а не как предмет. У обычных он слабее, у редких
+			сильнее — это второй, тихий признак редкости помимо обводки.
+		]]
+		local gradient = Instance.new("UIGradient")
+		gradient.Rotation = 90
+		gradient.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 150, 150)),
+		})
+		gradient.Parent = frame
+	end
 
 	if glow.thickness > 0 then
 		local stroke = Instance.new("UIStroke")
@@ -114,25 +125,34 @@ function ItemIcon.Build(
 end
 
 --[[
-	Расходник (бустеры и заряды M7). Слота и редкости у него нет, поэтому цвет
-	один — акцентный, а отличает их подпись под иконкой: расходников три вида,
-	и заводить им таблицу цветов ради трёх записей значило бы завести ещё одно
-	место, где они перечислены.
+	Расходник (бустеры и заряды M7): key — ключ бустера или заряда из
+	Config/Monetization. Картинка у него та же, что у соответствующего товара
+	в магазине: это один и тот же предмет, просто в одном месте его покупают,
+	а в другом он лежит.
+
+	Пока картинок нет, все расходники выглядят одинаково — акцентный квадрат,
+	а отличает их подпись: заводить таблицу цветов ради трёх записей значило бы
+	завести ещё одно место, где они перечислены.
 ]]
-function ItemIcon.Consumable(parent: Instance, name: string, size: number): Icon
+function ItemIcon.Consumable(parent: Instance, name: string, key: string, size: number): Icon
 	local frame = UiKit.Frame(parent, name, Palette.UI.accent)
 	frame.AnchorPoint = Vector2.new(0.5, 0.5)
 	frame.Position = UDim2.fromScale(0.5, 0.5)
 	frame.Size = UDim2.fromOffset(size, size)
 	UiKit.Corners(frame, 8)
 
-	local gradient = Instance.new("UIGradient")
-	gradient.Rotation = 90
-	gradient.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 150, 150)),
-	})
-	gradient.Parent = frame
+	local image = UiKit.Image(frame, "Image", Icons.Consumables[key])
+	if image then
+		frame.BackgroundTransparency = 1
+	else
+		local gradient = Instance.new("UIGradient")
+		gradient.Rotation = 90
+		gradient.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 150, 150)),
+		})
+		gradient.Parent = frame
+	end
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Name = "Glow"

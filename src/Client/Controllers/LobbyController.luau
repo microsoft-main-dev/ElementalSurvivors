@@ -30,6 +30,7 @@ local Balance = require(Shared.Config.Balance)
 local DailyPanel = require(script.Parent.Parent.UI.DailyPanel)
 local EggsPanel = require(script.Parent.Parent.UI.EggsPanel)
 local EvolvePanel = require(script.Parent.Parent.UI.EvolvePanel)
+local Icons = require(Shared.Config.Icons)
 local InventoryPanel = require(script.Parent.Parent.UI.InventoryPanel)
 local Net = require(Shared.Net)
 local OfflinePanel = require(script.Parent.Parent.UI.OfflinePanel)
@@ -458,26 +459,32 @@ local function buildBar(): ()
 		Ровно те системы, которые существуют. Квесты (M6) появятся здесь
 		вместе с собой: кнопка, открывающая пустое окно, хуже отсутствующей.
 	]]
-	local buttons: { { name: string, text: string } } = {
-		{ name = "Stage", text = "Play" },
+	--[[
+		icon — ключ в Icons.Ui, а не имя кнопки: у «Quests» подпись и значок
+		называются Daily, и подставлять одно вместо другого пришлось бы догадкой.
+		Пустая строка — значка нет, кнопка остаётся текстовой.
+	]]
+	local buttons: { { name: string, text: string, icon: string } } = {
+		{ name = "Stage", text = "Play", icon = "" },
 		--[[
 			Одна кнопка на всё имущество игрока: питомцы, снаряжение и расходники
 			живут разделами внутри неё. Три кнопки на три вида инвентаря
 			занимали треть панели и различались только тем, что в них лежит.
 		]]
-		{ name = "Inventory", text = "Inventory" },
-		{ name = "Eggs", text = "Eggs" },
-		{ name = "Shop", text = "Shop" },
-		{ name = "Talents", text = "Talents" },
-		{ name = "Quests", text = "Daily" },
-		{ name = "Store", text = "Store" },
-		{ name = "Settings", text = "Settings" },
+		{ name = "Inventory", text = "Inventory", icon = "Inventory" },
+		{ name = "Eggs", text = "Eggs", icon = "Eggs" },
+		{ name = "Shop", text = "Shop", icon = "Shop" },
+		{ name = "Talents", text = "Talents", icon = "Talents" },
+		{ name = "Quests", text = "Daily", icon = "Daily" },
+		{ name = "Store", text = "Store", icon = "Store" },
+		{ name = "Settings", text = "Settings", icon = "Settings" },
 	}
 
 	for order, entry in buttons do
 		local button = UiKit.Button(holder, entry.name, entry.text, Palette.UI.panel)
 		button.LayoutOrder = order
 		button.Size = UDim2.fromOffset(BUTTON_WIDTH, UiKit.ButtonHeight)
+		UiKit.ButtonIcon(button, if entry.icon ~= "" then Icons.Ui[entry.icon] else nil, 24)
 		button.Activated:Connect(function()
 			openPanel(entry.name, nil)
 		end)
