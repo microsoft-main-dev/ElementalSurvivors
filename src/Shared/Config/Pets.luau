@@ -46,7 +46,13 @@ local definitions: { PetDef } = {
 		starterAbility = "FireOrbit",
 		passives = { maxHealth = 10, walkSpeed = 0, magnetRadius = 1 },
 		elementDamage = 1.08,
-		model = { size = Vector3.new(2, 2, 2), shape = "Ball", neon = false, flies = false },
+		model = {
+			size = Vector3.new(2, 2, 2),
+			shape = "Ball",
+			neon = false,
+			flies = false,
+			modelKey = "EmberCub",
+		},
 	},
 	{
 		key = "FrostPup",
@@ -58,7 +64,7 @@ local definitions: { PetDef } = {
 		starterAbility = "IceShard",
 		passives = { maxHealth = 5, walkSpeed = 1, magnetRadius = 1 },
 		elementDamage = 1.08,
-		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = false, flies = false },
+		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = false, flies = false, modelKey = "FrostPup" },
 	},
 	{
 		key = "MossSprout",
@@ -70,7 +76,13 @@ local definitions: { PetDef } = {
 		starterAbility = "ThornAura",
 		passives = { maxHealth = 8, walkSpeed = 0, magnetRadius = 3 },
 		elementDamage = 1.08,
-		model = { size = Vector3.new(1.8, 2.4, 1.8), shape = "Cylinder", neon = false, flies = false },
+		model = {
+			size = Vector3.new(1.8, 2.4, 1.8),
+			shape = "Cylinder",
+			neon = false,
+			flies = false,
+			modelKey = "MossSprout",
+		},
 	},
 
 	--[[ A — заметный уклон в одну характеристику. ]]
@@ -84,7 +96,7 @@ local definitions: { PetDef } = {
 		starterAbility = "ChainSpark",
 		passives = { maxHealth = 5, walkSpeed = 2.5, magnetRadius = 2 },
 		elementDamage = 1.16,
-		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = true, flies = false },
+		model = { size = Vector3.new(2, 2, 2), shape = "Block", neon = true, flies = false, modelKey = "SparkKit" },
 	},
 	{
 		key = "DuskMoth",
@@ -96,7 +108,13 @@ local definitions: { PetDef } = {
 		starterAbility = "WingGust",
 		passives = { maxHealth = 5, walkSpeed = 1, magnetRadius = 5 },
 		elementDamage = 1.16,
-		model = { size = Vector3.new(2.4, 1.6, 2.4), shape = "Block", neon = true, flies = true },
+		model = {
+			size = Vector3.new(2.4, 1.6, 2.4),
+			shape = "Block",
+			neon = true,
+			flies = true,
+			modelKey = "DuskMoth",
+		},
 	},
 	{
 		key = "GlowFinch",
@@ -108,7 +126,13 @@ local definitions: { PetDef } = {
 		starterAbility = "MoteHalo",
 		passives = { maxHealth = 20, walkSpeed = 1, magnetRadius = 1 },
 		elementDamage = 1.16,
-		model = { size = Vector3.new(1.8, 1.8, 1.8), shape = "Ball", neon = true, flies = true },
+		model = {
+			size = Vector3.new(1.8, 1.8, 1.8),
+			shape = "Ball",
+			neon = true,
+			flies = true,
+			modelKey = "GlowFinch",
+		},
 	},
 
 	--[[ S — сильные бонусы к своей стихии, билд начинает ощущаться. ]]
@@ -122,7 +146,13 @@ local definitions: { PetDef } = {
 		starterAbility = "EmberTrail",
 		passives = { maxHealth = 25, walkSpeed = 1, magnetRadius = 2 },
 		elementDamage = 1.3,
-		model = { size = Vector3.new(2.6, 2.2, 2.6), shape = "Block", neon = true, flies = false },
+		model = {
+			size = Vector3.new(2.6, 2.2, 2.6),
+			shape = "Block",
+			neon = true,
+			flies = false,
+			modelKey = "MagmaHound",
+		},
 	},
 	{
 		key = "GlacierOwl",
@@ -134,7 +164,13 @@ local definitions: { PetDef } = {
 		starterAbility = "FrostBurst",
 		passives = { maxHealth = 15, walkSpeed = 2, magnetRadius = 4 },
 		elementDamage = 1.3,
-		model = { size = Vector3.new(2.2, 2.6, 2.2), shape = "Ball", neon = true, flies = true },
+		model = {
+			size = Vector3.new(2.2, 2.6, 2.2),
+			shape = "Ball",
+			neon = true,
+			flies = true,
+			modelKey = "GlacierOwl",
+		},
 	},
 
 	--[[ SS — узкая специализация, ради которой билд и собирают. ]]
@@ -148,7 +184,13 @@ local definitions: { PetDef } = {
 		starterAbility = "StormArc",
 		passives = { maxHealth = 30, walkSpeed = 2, magnetRadius = 3 },
 		elementDamage = 1.45,
-		model = { size = Vector3.new(3, 2.4, 3), shape = "Block", neon = true, flies = true },
+		model = {
+			size = Vector3.new(3, 2.4, 3),
+			shape = "Block",
+			neon = true,
+			flies = true,
+			modelKey = "StormDrake",
+		},
 	},
 	{
 		key = "VoidLynx",
@@ -160,7 +202,13 @@ local definitions: { PetDef } = {
 		starterAbility = "VoidFangs",
 		passives = { maxHealth = 20, walkSpeed = 3, magnetRadius = 5 },
 		elementDamage = 1.45,
-		model = { size = Vector3.new(2.8, 2.2, 2.8), shape = "Ball", neon = true, flies = false },
+		model = {
+			size = Vector3.new(2.8, 2.2, 2.8),
+			shape = "Ball",
+			neon = true,
+			flies = false,
+			modelKey = "VoidLynx",
+		},
 	},
 
 	--[[ SSS — вершина коллекции: и бонусы, и вклад в экспедиции. ]]
@@ -174,7 +222,13 @@ local definitions: { PetDef } = {
 		starterAbility = "SolarFlare",
 		passives = { maxHealth = 40, walkSpeed = 3, magnetRadius = 6 },
 		elementDamage = 1.65,
-		model = { size = Vector3.new(3.2, 3.2, 3.2), shape = "Ball", neon = true, flies = true },
+		model = {
+			size = Vector3.new(3.2, 3.2, 3.2),
+			shape = "Ball",
+			neon = true,
+			flies = true,
+			modelKey = "SolarPhoenix",
+		},
 	},
 	{
 		key = "VerdantWarden",
@@ -186,7 +240,13 @@ local definitions: { PetDef } = {
 		starterAbility = "SeedVolley",
 		passives = { maxHealth = 55, walkSpeed = 1, magnetRadius = 5 },
 		elementDamage = 1.65,
-		model = { size = Vector3.new(2.8, 3.4, 2.8), shape = "Cylinder", neon = true, flies = false },
+		model = {
+			size = Vector3.new(2.8, 3.4, 2.8),
+			shape = "Cylinder",
+			neon = true,
+			flies = false,
+			modelKey = "VerdantWarden",
+		},
 	},
 }
 

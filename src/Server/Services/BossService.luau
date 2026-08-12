@@ -33,6 +33,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Bosses = require(Shared.Config.Bosses)
+local Enemies = require(Shared.Config.Enemies)
 local EnemyMotion = require(Shared.Util.EnemyMotion)
 local EnemyService = require(script.Parent.EnemyService)
 local Net = require(Shared.Net)
@@ -73,11 +74,22 @@ type State = {
 	rng: RNG.RNG,
 
 	--[[
-		Стойкие поля (M2+): лечащие и ядовитые лужи шамана. Первые эффекты,
+		Стойкие поля (M2+): усиление и ядовитые лужи шамана. Первые эффекты,
 		которые живут дольше кадра, поэтому у босса появился свой список —
 		остальные атаки бьют мгновенно и хранить о них нечего.
 	]]
 	fields: { Field },
+
+	--[[
+		Стрелки на колоннах. Неуязвимы и живут до смерти босса — это не
+		источник урона, а часы: у шамана нет прямых атак, и без нарастающего
+		давления бой с ним можно было бы тянуть сколько угодно, просто бегая.
+
+		Врагами они не являются вовсе: у обычного врага Y всегда ноль, а этот
+		сидит на верхушке колонны. Отдельной сущностью босса он получает
+		высоту бесплатно и не занимает места в потоке репликации врагов.
+	]]
+	archers: { Archer },
 }
 
 type Field = {
@@ -89,7 +101,15 @@ type Field = {
 	tickInterval: number,
 	tickTimer: number,
 	damage: number,
-	heal: number,
+	buffSeconds: number,
+}
+
+type Archer = {
+	x: number,
+	y: number,
+	z: number,
+	cooldown: number,
+	ranged: Types.EnemyRanged,
 }
 
 local BossService = {}
@@ -104,7 +124,7 @@ local contactHandler: ((player: Player, damage: number) -> ())? = nil
 local STATE_INTERVAL = 0.1
 
 --[[
-	Сколько врагов опрашивается при поиске скопления под лечащее поле.
+	Сколько врагов опрашивается при поиске скопления под поле усиления.
 	Восьми хватает, чтобы найти толпу, и это восемь запросов к хешу вместо
 	перебора всех трёхсот.
 ]]
@@ -178,7 +198,9 @@ local function beginAttack(state: State, attack: BossAttack, playerLocal: Vector
 		length = 0,
 		width = 0,
 		duration = attack.telegraph,
-		harmless = attack.kind == "Summon",
+		-- Безвредные телеграфы: там, где показан круг, урона не будет вовсе.
+		-- Призыв и стрелок только объявляют, что сейчас кто-то появится.
+		harmless = attack.kind == "Summon" or attack.kind == "HillArcher",
 	}
 
 	if attack.kind == "Charge" then
@@ -215,7 +237,7 @@ local function addField(state: State, kind: Types.BossFieldKind, attack: BossAtt
 		-- Первый тик не мгновенный: у игрока есть интервал, чтобы выйти.
 		tickTimer = interval,
 		damage = attack.damage,
-		heal = attack.heal or 0,
+		buffSeconds = attack.buffSeconds or 0,
 	})
 
 	sendEvent(state, {
@@ -229,7 +251,144 @@ local function addField(state: State, kind: Types.BossFieldKind, attack: BossAtt
 end
 
 --[[
-	Тик полей: лечение своим, урон игроку.
+	Ядовитые области вокруг игрока — несколько за одну атаку (areaCount).
+
+	НИ ОДНА не появляется на самом игроке: расстояние отсчитывается от края
+	области плюс зазор, поэтому в момент появления он гарантированно снаружи.
+	Область, возникшая под ногами, отняла бы у него ход вместо того, чтобы
+	поставить выбор, — это ровно то же требование, что и телеграф у атаки.
+
+	Попытки нужны из-за прижатия к арене: у стены точка съезжает внутрь и
+	может оказаться слишком близко. Не нашлось за восемь попыток — ставим
+	в сторону центра арены, там место есть всегда.
+]]
+local function spawnAreas(state: State, attack: BossAttack, playerLocal: Vector3): ()
+	local numbers = Balance.Bosses
+	local minDistance = attack.radius + numbers.areaMinGap
+	local maxDistance = math.max(numbers.areaMaxDistance, minDistance + 1)
+	local limit = Balance.Arena.size * 0.5 - attack.radius
+
+	for _ = 1, math.max(attack.areaCount or 1, 1) do
+		local x, z = 0, 0
+		local placed = false
+
+		for _ = 1, 8 do
+			local angle = state.rng.NextNumber(0, math.pi * 2)
+			local distance = state.rng.NextNumber(minDistance, maxDistance)
+			x = math.clamp(playerLocal.X + math.cos(angle) * distance, -limit, limit)
+			z = math.clamp(playerLocal.Z + math.sin(angle) * distance, -limit, limit)
+
+			local dx = x - playerLocal.X
+			local dz = z - playerLocal.Z
+			if dx * dx + dz * dz >= minDistance * minDistance then
+				placed = true
+				break
+			end
+		end
+
+		if not placed then
+			local toCenter = Vector3.new(-playerLocal.X, 0, -playerLocal.Z)
+			local direction = if toCenter.Magnitude > 1e-3 then toCenter.Unit else Vector3.new(1, 0, 0)
+			x = math.clamp(playerLocal.X + direction.X * minDistance, -limit, limit)
+			z = math.clamp(playerLocal.Z + direction.Z * minDistance, -limit, limit)
+		end
+
+		addField(state, "Poison", attack, x, z)
+	end
+end
+
+--[[
+	Стрелок на колонне.
+
+	Колонна выбирается из того же набора, по которому расталкиваются враги, —
+	занятые пропускаются, чтобы двое не сели друг на друга. Высота берётся
+	с самой колонны: она и есть причина, по которой до стрелка не дотянуться.
+
+	Стрелять он умеет тем же, чем обычный гоблин-лучник: набор снаряда берётся
+	из его определения по summonKey и запоминается прямо в записи стрелка.
+	Второй таблицы «как стреляет стрелок босса» быть не должно.
+]]
+local function spawnArcher(state: State, attack: BossAttack): ()
+	local def = if attack.summonKey then Enemies.ByKey[attack.summonKey] else nil
+	local ranged = if def then def.ranged else nil
+	if not ranged then
+		return
+	end
+
+	local obstacles = EnemyService.GetObstacles(state.slot)
+	if #obstacles == 0 then
+		return
+	end
+
+	local start = state.rng.NextInteger(1, #obstacles)
+	for offset = 0, #obstacles - 1 do
+		local obstacle = obstacles[(start + offset - 1) % #obstacles + 1]
+
+		local taken = false
+		for _, archer in state.archers do
+			local dx = archer.x - obstacle.position.X
+			local dz = archer.z - obstacle.position.Z
+			if dx * dx + dz * dz < 1 then
+				taken = true
+				break
+			end
+		end
+
+		if not taken then
+			local archer: Archer = {
+				x = obstacle.position.X,
+				z = obstacle.position.Z,
+				y = obstacle.size.Y + Balance.Bosses.archerPerchLift,
+				cooldown = 0,
+				ranged = ranged,
+			}
+			table.insert(state.archers, archer)
+
+			sendEvent(state, {
+				kind = "Archer",
+				x = archer.x,
+				y = archer.y,
+				z = archer.z,
+			})
+			return
+		end
+	end
+end
+
+--[[
+	Выстрелы стрелков. Снаряды те же, что у обычного гоблина-лучника, —
+	вторая система вражеских снарядов не заводится, и трассер с попаданием
+	по игроку остаются написанными ровно один раз (EnemyService.FireShot).
+
+	Дистанции стрелок не держит и не двигается вовсе: он сидит на колонне
+	и стреляет, когда игрок в радиусе. В этом и смысл — от него нельзя
+	избавиться, можно только уйти с линии.
+]]
+local function archerStep(state: State, dt: number, playerLocal: Vector3): ()
+	for _, archer in state.archers do
+		local ranged = archer.ranged
+		archer.cooldown -= dt
+		if archer.cooldown > 0 then
+			continue
+		end
+
+		local dx = playerLocal.X - archer.x
+		local dz = playerLocal.Z - archer.z
+		local range = ranged.range * Balance.Bosses.archerRangeFactor
+		if dx * dx + dz * dz > range * range then
+			-- Вне дистанции кулдаун не копится: выстрел случится сразу,
+			-- как игрок войдёт в радиус, а не пачкой накопленных.
+			archer.cooldown = 0
+			continue
+		end
+
+		archer.cooldown = ranged.cooldown
+		EnemyService.FireShot(state.slot, Vector3.new(archer.x, 0, archer.z), playerLocal, ranged)
+	end
+end
+
+--[[
+	Тик полей: усиление своим, урон игроку.
 
 	Урон идёт тем же обработчиком касания, что и всё остальное, — значит
 	i-frames у игрока общие, и лужа не пробивает их отдельным путём.
@@ -252,8 +411,14 @@ local function fieldStep(state: State, dt: number, playerLocal: Vector3): ()
 		if field.tickTimer <= 0 then
 			field.tickTimer += field.tickInterval
 
-			if field.kind == "Heal" then
-				EnemyService.Heal(state.slot, Vector3.new(field.x, 0, field.z), field.radius, field.heal)
+			if field.kind == "Buff" then
+				--[[
+					Усиление вешается тиком, а не один раз при появлении поля:
+					оно достаётся и тем, кто вошёл в круг позже. Иначе игрок
+					научился бы просто пережидать поле в стороне, а призванные
+					входили бы в него уже бесполезными.
+				]]
+				EnemyService.Buff(state.slot, Vector3.new(field.x, 0, field.z), field.radius, field.buffSeconds)
 			else
 				local dx = playerLocal.X - field.x
 				local dz = playerLocal.Z - field.z
@@ -306,28 +471,22 @@ local function executeAttack(state: State, attack: BossAttack, playerLocal: Vect
 		state.chargeTime = Balance.Bosses.chargeSeconds
 	elseif attack.kind == "Summon" then
 		EnemyService.SpawnBurst(state.slot, state.position, attack.count or 0, attack.radius, attack.summonKey)
-	elseif attack.kind == "HealField" then
+	elseif attack.kind == "BuffField" then
 		--[[
-			Лечение ставится НАД СКОПЛЕНИЕМ призванных, а не под боссом:
-			в этом вся механика — игрок должен выбирать, гнать ли толпу
-			из-под лечения или бить самого шамана.
+			Усиление ставится НАД СКОПЛЕНИЕМ призванных, а не под боссом:
+			в этом вся механика — игрок должен выбирать, уходить ли от толпы,
+			которую сейчас нельзя убить, или бить самого шамана.
 
-			Толпы нет — лечим вокруг себя: поле, поставленное в пустоту,
+			Толпы нет — ставим вокруг себя: поле, поставленное в пустоту,
 			выглядело бы как промах босса, а не как решение игрока.
 		]]
 		local cluster = EnemyService.FindCluster(state.slot, attack.radius, CLUSTER_SAMPLES)
 		local center = cluster or state.position
-		addField(state, "Heal", attack, center.X, center.Z)
+		addField(state, "Buff", attack, center.X, center.Z)
 	elseif attack.kind == "PoisonField" then
-		--[[
-			Ядовитая лужа — в случайной точке арены, а не под игроком: она
-			должна отнимать место, а не бить наверняка. Точка не ближе
-			собственного радиуса к краю, иначе половина лужи уходит за стену.
-		]]
-		local limit = Balance.Arena.size * 0.5 - attack.radius
-		local x = state.rng.NextNumber(-limit, limit)
-		local z = state.rng.NextNumber(-limit, limit)
-		addField(state, "Poison", attack, x, z)
+		spawnAreas(state, attack, playerLocal)
+	elseif attack.kind == "HillArcher" then
+		spawnArcher(state, attack)
 	end
 end
 
@@ -411,6 +570,7 @@ function BossService.Tick(slot: number, dt: number, playerLocal: Vector3): ()
 
 	moveStep(state, dt, playerLocal)
 	fieldStep(state, dt, playerLocal)
+	archerStep(state, dt, playerLocal)
 	contactStep(state, playerLocal)
 
 	state.stateTimer += dt
@@ -477,6 +637,12 @@ function BossService.Damage(slot: number, amount: number): (boolean, number)
 	end
 
 	state.dead = true
+	--[[
+		Стрелки умирают вместе с боссом. Неуязвимость на них держится ровно
+		до этого момента: пока он жив, от них не избавиться, и это единственное,
+		что мешает бесконечно бегать от босса без прямых атак.
+	]]
+	table.clear(state.archers)
 	sendEvent(state, { kind = "Despawn" })
 
 	local handler = deathHandler
@@ -545,6 +711,7 @@ function BossService.Spawn(slot: number, player: Player, bossKey: string, health
 		dead = false,
 
 		fields = {},
+		archers = {},
 		--[[
 			Свой генератор на боссфайт: ядовитые лужи должны ложиться
 			по-разному от забега к забегу, но не тянуть общий Random,

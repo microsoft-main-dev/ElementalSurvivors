@@ -29,6 +29,9 @@
 		EnemyService.SetSpawnEnabled(slot, enabled)        -- конец фазы выживания
 		EnemyService.SetSweeping(slot, sweeping)           -- стягивание оставшихся
 		EnemyService.ClearAll(slot)                        -> number   (убрано молча)
+		EnemyService.Buff(slot, position, radius, seconds) -> count    (поле босса)
+		EnemyService.FireShot(slot, from, toward, ranged)  -> boolean  (стрелок босса)
+		EnemyService.GetObstacles(slot)                    -> { ArenaLayout.Obstacle }
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -130,6 +133,16 @@ type Sim = {
 	typeId: { number },
 	phase: { number },
 	alive: { boolean },
+	--[[
+		Сколько секунд врагу осталось быть усиленным полем босса. Ноль или
+		отсутствие — обычный враг.
+
+		Усиленный неуязвим и бежит с абсолютной скоростью (не множителем):
+		она задана долей от базовой скорости игрока и не зависит от того,
+		кого именно усилили, — иначе слизень и гоблин удирали бы по-разному
+		от одного и того же поля.
+	]]
+	buffLeft: { number },
 
 	freeList: { number },
 	freeCount: number,
@@ -161,6 +174,9 @@ type Sim = {
 	obstaclePositions: { Vector3 },
 	obstacleRadii: { number },
 	obstacleQueryRadius: number,
+	-- Тот же набор целиком: у колонны есть ещё и высота, а её просит
+	-- BossService, чтобы посадить стрелка на верхушку.
+	obstacleList: { ArenaLayout.Obstacle },
 
 	-- Переиспользуемые буферы под запросы к хешам
 	neighbours: { number },
@@ -286,6 +302,12 @@ local function spawnOne(sim: Sim, def: EnemyDef, center: Vector3, radius: number
 	end
 	sim.typeId[id] = def.typeId
 	sim.phase[id] = sim.rng.NextNumber(0, 6.28)
+	--[[
+		Усиление снимается на спавне по той же причине, что и кулдаун выстрела:
+		id переиспользуются, и новорождённый гоблин унаследовал бы остаток
+		неуязвимости от того, кто умер под этим номером.
+	]]
+	sim.buffLeft[id] = 0
 	sim.alive[id] = true
 	sim.aliveCount += 1
 	if def.ranged then
@@ -527,11 +549,31 @@ local function moveStep(sim: Sim, dt: number, playerLocal: Vector3): ()
 		speedMult *= Balance.Stages.sweepSpeedMult
 	end
 
+	local buffLeft = sim.buffLeft
+	local buffSpeed = Balance.Combat.playerWalkSpeed * Balance.Bosses.buffSpeedFactor
+
 	for id = 1, sim.highWater do
 		if alive[id] then
 			local def = Enemies.List[typeIds[id]]
 			local position = positions[id]
 			local speed = def.stats.speed * speedMult
+
+			--[[
+				Усиленный бежит с АБСОЛЮТНОЙ скоростью поля, а не со своей,
+				умноженной на что-то: смысл усиления в том, что от него не
+				убежать, и он не должен зависеть от того, кого усилили.
+
+				Отсчёт идёт здесь же, в шаге движения: отдельный проход по
+				пяти сотням врагов ради одного вычитания не нужен.
+			]]
+			local remaining = buffLeft[id]
+			if remaining and remaining > 0 then
+				remaining -= dt
+				buffLeft[id] = remaining
+				if remaining > 0 then
+					speed = buffSpeed
+				end
+			end
 
 			--[[
 				Стрелок держит дистанцию, остальные бегут вплотную. В фазе
@@ -919,7 +961,9 @@ end
 	Расстановка берётся из того же ArenaLayout, из которого сервер построил
 	колонны, а клиент — свою копию для симуляции.
 ]]
-local function buildObstacles(seed: number): (SpatialHash.SpatialHash, { Vector3 }, { number }, number)
+local function buildObstacles(
+	seed: number
+): (SpatialHash.SpatialHash, { Vector3 }, { number }, number, { ArenaLayout.Obstacle })
 	local layout = ArenaLayout.Generate(seed)
 
 	local positions: { Vector3 } = {}
@@ -938,7 +982,7 @@ local function buildObstacles(seed: number): (SpatialHash.SpatialHash, { Vector3
 	local hash = SpatialHash.new(Balance.Combat.cellSize * 2)
 	hash.Rebuild(positions, occupied, #layout)
 
-	return hash, positions, radii, maxRadius
+	return hash, positions, radii, maxRadius, layout
 end
 
 --[[
@@ -946,7 +990,7 @@ end
 	не масштабируются и набор берётся из расписания волн.
 ]]
 function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, seed: number, stage: Types.StageDef?): ()
-	local obstacleHash, obstaclePositions, obstacleRadii, obstacleQueryRadius = buildObstacles(seed)
+	local obstacleHash, obstaclePositions, obstacleRadii, obstacleQueryRadius, obstacleList = buildObstacles(seed)
 
 	local sim: Sim = {
 		slot = slot,
@@ -992,6 +1036,7 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		typeId = table.create(CAPACITY, 1),
 		phase = table.create(CAPACITY, 0),
 		alive = table.create(CAPACITY, false),
+		buffLeft = table.create(CAPACITY, 0),
 
 		freeList = table.create(CAPACITY, 0),
 		freeCount = CAPACITY,
@@ -1016,6 +1061,7 @@ function EnemyService.StartRun(slot: number, player: Player, origin: Vector3, se
 		obstacleHash = obstacleHash,
 		obstaclePositions = obstaclePositions,
 		obstacleRadii = obstacleRadii,
+		obstacleList = obstacleList,
 		obstacleQueryRadius = obstacleQueryRadius,
 
 		neighbours = {},
@@ -1101,28 +1147,103 @@ end
 	Лечит до исходного здоровья и не воскрешает: мёртвый id уже свободен
 	и мог быть выдан новому врагу.
 ]]
-function EnemyService.Heal(slot: number, position: Vector3, radius: number, amount: number): number
+--[[
+	Усилить всех своих в круге: неуязвимость и скорость на seconds секунд.
+
+	Событие уходит ТЕМ ЖЕ потоком, что спавны и смерти, — иначе клиент
+	получил бы усиление для id, который у него ещё не родился или уже умер.
+
+	Повторное попадание в поле продлевает усиление, а не складывается с ним:
+	враг, простоявший в поле всю его жизнь, обязан выйти оттуда усиленным
+	ровно на seconds, а не на минуту.
+]]
+function EnemyService.Buff(slot: number, position: Vector3, radius: number, seconds: number): number
 	local sim = sims[slot]
-	if not sim or amount <= 0 then
+	if not sim or seconds <= 0 then
 		return 0
 	end
 
 	local count = sim.hash.Collect(position, radius + maxEnemyRadius, sim.neighbours)
-	local healed = 0
+	local buffed = 0
+	local aux = math.clamp(math.floor(seconds * Packet.BuffScale + 0.5), 1, 255)
 
 	for index = 1, count do
 		local id = sim.neighbours[index]
-		if sim.alive[id] then
-			local maximum = sim.maxHp[id]
-			local current = sim.hp[id]
-			if current < maximum then
-				sim.hp[id] = math.min(current + amount, maximum)
-				healed += 1
-			end
+		if sim.alive[id] and (sim.buffLeft[id] or 0) < seconds then
+			sim.buffLeft[id] = seconds
+			pushEvent(sim, Packet.Kind.Buff, id, aux, 0, 0)
+			buffed += 1
 		end
 	end
 
-	return healed
+	return buffed
+end
+
+--[[
+	Выстрел из точки в точку чужими руками: стрелок босса сидит на колонне,
+	живёт в BossService и врагом не является вовсе, но снаряды у него те же.
+
+	Второй системы вражеских снарядов заводить нельзя: попадание по игроку,
+	трассер и потолок снарядов уже написаны здесь ровно один раз.
+]]
+function EnemyService.FireShot(slot: number, from: Vector3, toward: Vector3, ranged: Types.EnemyRanged): boolean
+	local sim = sims[slot]
+	if not sim then
+		return false
+	end
+
+	local dx = toward.X - from.X
+	local dz = toward.Z - from.Z
+	local distance = math.sqrt(dx * dx + dz * dz)
+	if distance < 1e-3 then
+		return false
+	end
+
+	local shotId = allocateShot(sim)
+	if not shotId then
+		return false
+	end
+
+	local dirX, dirZ = dx / distance, dz / distance
+	sim.shotPosition[shotId] = from
+	sim.shotDirection[shotId] = Vector3.new(dirX, 0, dirZ)
+	sim.shotDamage[shotId] = ranged.damage
+	sim.shotSpeed[shotId] = ranged.speed
+	sim.shotHitRadius[shotId] = ranged.hitRadius
+	sim.shotLife[shotId] = ranged.lifetime
+	sim.shotDelay[shotId] = ranged.telegraph
+	sim.shotAlive[shotId] = true
+
+	local remote = shotsRemote
+	if remote then
+		remote:FireClient(sim.player, {
+			{
+				x = from.X,
+				z = from.Z,
+				dx = dirX,
+				dz = dirZ,
+				delay = ranged.telegraph,
+				speed = ranged.speed,
+				life = ranged.lifetime,
+			},
+		})
+	end
+
+	return true
+end
+
+--[[
+	Колонны арены — их читает BossService, чтобы посадить стрелка на верхушку.
+	Отдаётся тот самый набор из ArenaLayout, по которому расталкиваются враги
+	и который строит ArenaService: второго источника правды о том, где стоят
+	колонны, быть не должно.
+]]
+function EnemyService.GetObstacles(slot: number): { ArenaLayout.Obstacle }
+	local sim = sims[slot]
+	if not sim then
+		return {}
+	end
+	return sim.obstacleList
 end
 
 --[[
@@ -1165,6 +1286,16 @@ end
 function EnemyService.Damage(slot: number, id: number, amount: number): (boolean, number)
 	local sim = sims[slot]
 	if not sim or not sim.alive[id] then
+		return false, 0
+	end
+
+	--[[
+		Усиленный не получает урона вовсе. Возвращается честный ноль, а не
+		«урон прошёл»: счётчик урона за забег не должен считать то, чего
+		не было, иначе экран результатов покажет вклад, которого нет.
+	]]
+	local buffed = sim.buffLeft[id]
+	if buffed and buffed > 0 then
 		return false, 0
 	end
 

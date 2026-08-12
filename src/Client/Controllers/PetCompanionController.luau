@@ -32,8 +32,10 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
+local Models = require(Shared.Config.Models)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
+local PartModel = require(Shared.Util.PartModel)
 local Pets = require(Shared.Config.Pets)
 local SettingsController = require(script.Parent.SettingsController)
 local Types = require(Shared.Types)
@@ -46,7 +48,20 @@ local localPlayer = Players.LocalPlayer
 
 type Companion = {
 	folder: Folder,
-	body: BasePart,
+	--[[
+		Тело питомца — либо собранная модель (Config/Models), либо одна деталь,
+		если модели ему ещё не нарисовали. Заглушка обязана жить: питомцев
+		двенадцать, и рисуются они по одному.
+
+		Размер нужен обоим путям — по нему считается высота над землёй и радиус
+		орбиты искр, — поэтому лежит отдельным полем, а не спрашивается у детали.
+	]]
+	model: PartModel.Built?,
+	body: BasePart?,
+	size: Vector3,
+	-- Деталь-держатель PointLight. Своя, потому что у модели одной детали,
+	-- на которую его повесить, не существует.
+	light: BasePart?,
 	sparkles: { BasePart },
 	petId: string,
 	flies: boolean,
@@ -105,24 +120,64 @@ local function build(player: Player, def: Types.PetDef): ()
 	folder.Name = `Pet_{player.Name}`
 	folder.Parent = parent
 
-	local part = makePart("Body", folder)
-	part.Size = def.model.size
-	part.Color = color
-	part.Material = if def.model.neon or glow.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+	--[[
+		Модель, если она нарисована. Красится СВОИМ цветом (Palette.Model.bases),
+		а не стихией: питомцы нарисованы зверями, и медвежонок рыжий независимо
+		от того, каким огнём он бьёт. Стихию по-прежнему видно — свечением
+		редкости вокруг него.
+	]]
+	local built: PartModel.Built? = nil
+	local body: BasePart? = nil
+	local lightPart: BasePart? = nil
+	local size = def.model.size
 
-	if def.model.shape == "Ball" then
-		part.Shape = Enum.PartType.Ball
-	elseif def.model.shape == "Cylinder" then
-		part.Shape = Enum.PartType.Cylinder
+	--[[
+		Воксельная модель достаётся ВСЕМ, решением владельца.
+
+		Упрощённый вариант остаётся описанным в Config/Models (Models.Lite),
+		но не подставляется: свой питомец и чужой выглядят одинаково. Цена
+		известна и принята — 115 деталей на питомца, до 2300 в полном лобби.
+		Если на телефоне это окажется дорого, подстановка возвращается одной
+		строкой здесь, а не переписыванием моделей.
+	]]
+	local modelDef = if def.model.modelKey then Models.ByKey[def.model.modelKey] else nil
+	if modelDef then
+		-- Цвет ищется по КЛЮЧУ ПИТОМЦА, а не по ключу модели: у упрощённого
+		-- варианта имя другое, а зверь тот же.
+		local base = Palette.Model.bases[def.key] or color
+		built = PartModel.Build(modelDef, PartModel.TintsFor(base, Palette.Model.accent), folder);
+		(built :: PartModel.Built).SetVisible(true)
+		size = Vector3.new(modelDef.footprint * 2, modelDef.height, modelDef.footprint * 2)
+	else
+		local part = makePart("Body", folder)
+		part.Size = def.model.size
+		part.Color = color
+		part.Material = if def.model.neon or glow.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+
+		if def.model.shape == "Ball" then
+			part.Shape = Enum.PartType.Ball
+		elseif def.model.shape == "Cylinder" then
+			part.Shape = Enum.PartType.Cylinder
+		end
+		body = part
 	end
 
+	--[[
+		Свет висит не на теле, а на собственной детали: у модели «тела» как
+		одной детали нет вовсе, а свет должен светить из середины зверя.
+	]]
 	if glow.brightness > 0 and rich then
+		local lamp = makePart("Glow", folder)
+		lamp.Size = Vector3.one * 0.2
+		lamp.Transparency = 1
+
 		local light = Instance.new("PointLight")
 		light.Brightness = glow.brightness
 		light.Range = glow.range
 		light.Color = color
 		light.Shadows = false
-		light.Parent = part
+		light.Parent = lamp
+		lightPart = lamp
 	end
 
 	local sparkles: { BasePart } = {}
@@ -139,7 +194,10 @@ local function build(player: Player, def: Types.PetDef): ()
 
 	companions[player] = {
 		folder = folder,
-		body = part,
+		model = built,
+		body = body,
+		size = size,
+		light = lightPart,
 		sparkles = sparkles,
 		petId = def.key,
 		flies = def.model.flies,
@@ -229,7 +287,7 @@ local function step(companion: Companion, deltaTime: number, root: BasePart): ()
 		Считается от CFrame, а не от позиции, чтобы питомец не перебегал
 		с одной стороны на другую при развороте.
 	]]
-	local height = if companion.flies then numbers.flyHeight else part.Size.Y * 0.5 + numbers.groundClearance
+	local height = if companion.flies then numbers.flyHeight else companion.size.Y * 0.5 + numbers.groundClearance
 	local target = root.CFrame * Vector3.new(numbers.sideOffset, 0, numbers.backOffset)
 	target = Vector3.new(target.X, groundLevel(root) + height, target.Z)
 
@@ -253,7 +311,30 @@ local function step(companion: Companion, deltaTime: number, root: BasePart): ()
 		then math.sin(companion.phase) * amplitude
 		else math.abs(math.sin(companion.phase)) * amplitude
 
-	part.CFrame = CFrame.new(companion.drawn + Vector3.new(0, bob, 0)) * (root.CFrame - root.CFrame.Position)
+	--[[
+		Питомец смотрит туда же, куда хозяин: разворот берётся у корня, а не
+		считается из движения — питомец держится сбоку и на развороте хозяина
+		двигается вбок, то есть своё направление у него было бы поперёк.
+	]]
+	local pivot = CFrame.new(companion.drawn + Vector3.new(0, bob, 0)) * (root.CFrame - root.CFrame.Position)
+
+	local lamp = companion.light
+	if lamp then
+		lamp.CFrame = pivot
+	end
+
+	local built = companion.model
+	if built then
+		--[[
+			Модель стоит НА земле: её offset отсчитан от пола, а pivot указывает
+			в середину питомца. Опускаем на полвысоты, иначе зверь висит.
+
+			Скорость нулевая: шага у питомцев нет, они подпрыгивают.
+		]]
+		built.Draw(pivot * CFrame.new(0, -companion.size.Y * 0.5, 0), deltaTime, 0)
+	elseif part then
+		part.CFrame = pivot
+	end
 
 	local count = #companion.sparkles
 	if count == 0 then
@@ -261,11 +342,13 @@ local function step(companion: Companion, deltaTime: number, root: BasePart): ()
 	end
 
 	companion.sparklePhase = (companion.sparklePhase + deltaTime * numbers.sparkleSpeed) % 1
-	local radius = math.max(part.Size.X, part.Size.Z) * 0.8
+	local radius = math.max(companion.size.X, companion.size.Z) * 0.8
 
+	-- Орбита считается от пивота, а не от детали тела: у собранной модели
+	-- такой детали нет, а искры должны кружить вокруг зверя целиком.
 	for index, sparkle in companion.sparkles do
 		local angle = (companion.sparklePhase + (index - 1) / count) * math.pi * 2
-		sparkle.CFrame = part.CFrame
+		sparkle.CFrame = pivot
 			* CFrame.new(math.cos(angle) * radius, math.sin(angle * 2) * 0.4, math.sin(angle) * radius)
 	end
 end

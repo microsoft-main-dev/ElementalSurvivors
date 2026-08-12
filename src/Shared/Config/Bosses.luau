@@ -15,11 +15,17 @@
 	одновременно с уроном, не оставляет ему решения вовсе и читается как
 	несправедливость. Валидатор внизу файла это требование проверяет.
 
+	МОДЕЛЬ НЕОБЯЗАТЕЛЬНА. modelKey указывает на Config/Models; без него босс
+	рисуется одной деталью по model, как раньше. Заглушка обязана пережить
+	любой деф, которому модель ещё не нарисовали.
+
 	Публичный API:
 		Bosses.List / Bosses.ByKey
 		Bosses.PhaseFor(def, healthFraction) -> BossPhase
 ]]
 
+local Enemies = require(script.Parent.Enemies)
+local Models = require(script.Parent.Models)
 local Types = require(script.Parent.Parent.Types)
 
 type BossDef = Types.BossDef
@@ -44,6 +50,7 @@ local definitions: { BossDef } = {
 		radius = 10,
 		contactDamage = 20,
 		model = { size = Vector3.new(20, 15, 20), shape = "Ball", neon = false },
+		modelKey = "SlimeKing",
 		phases = {
 			{
 				healthAbove = 0.5,
@@ -108,23 +115,40 @@ local definitions: { BossDef } = {
 	--[[
 		Goblin Shaman — босс дремучего леса.
 
-		Не давит телом, а управляет боем: постоянно зовёт мечников, лечит
-		скопления своих и засеивает арену ядовитыми лужами. Драться с ним
-		в толпе собственных призванных — и есть его механика: убивать их
-		бесполезно, пока стоит лечащее поле, а отойти мешают лужи.
+		Он не дерётся сам ВООБЩЕ: ни волны, ни рывка, только касание для тех,
+		кто встал вплотную. Всё, что он делает, — это гонит на игрока орду и
+		отнимает у него место.
+
+		Три рычага, и каждый решает свою задачу:
+
+		- Призыв. Основное занятие, постоянный поток мечников.
+		- Поле усиления над толпой: попавшие в него неуязвимы и быстры пять
+		  секунд. Скорость чуть выше БАЗОВОЙ скорости игрока, поэтому новичок
+		  обязан вертеться, а вложившийся в скорость отрывается.
+		- Ядовитые лужи — три штуки вокруг игрока за раз, ни одна не под ним.
+
+		И часы: раз в минуту на колонну садится неуязвимый стрелок, который
+		живёт до смерти босса. Без него бой с боссом, у которого нет прямых
+		атак, можно было бы тянуть бесконечно, просто убегая.
+
+		Скорость самого шамана порезана вдвое решением владельца: догонять
+		игрока — не его работа, у него для этого есть орда.
 	]]
 	{
 		key = "GoblinShaman",
 		typeId = 0,
 		displayName = "Goblin Shaman",
 		element = "Dark",
-		radius = 7,
+		-- Ужат вместе с моделью (см. Config/Models): пятно сверяется
+		-- с радиусом при загрузке, разъехаться им нельзя.
+		radius = 5,
 		contactDamage = 18,
 		model = { size = Vector3.new(13, 15, 13), shape = "Block", neon = true },
+		modelKey = "GoblinShaman",
 		phases = {
 			{
 				healthAbove = 0.6,
-				moveSpeed = 11,
+				moveSpeed = 6,
 				attacks = {
 					{
 						kind = "Summon",
@@ -143,13 +167,27 @@ local definitions: { BossDef } = {
 						radius = 16,
 						duration = 12,
 						tickInterval = 1,
+						areaCount = 3,
 					},
-					{ kind = "Shockwave", telegraph = 1, cooldown = 8, damage = 22, radius = 26, speed = 44 },
+					--[[
+						Часы боссфайта. Кулдаун ровно минута, и стоит он в ОБЕИХ
+						фазах: давление обязано копиться с первой секунды, а не
+						с того момента, когда игрок собьёт боссу шесть десятых
+						здоровья.
+					]]
+					{
+						kind = "HillArcher",
+						telegraph = 1.2,
+						cooldown = 60,
+						damage = 0,
+						radius = 10,
+						summonKey = "GoblinArcher",
+					},
 				},
 			},
 			{
 				healthAbove = 0,
-				moveSpeed = 13,
+				moveSpeed = 7,
 				attacks = {
 					{
 						kind = "Summon",
@@ -162,18 +200,18 @@ local definitions: { BossDef } = {
 					},
 					{
 						--[[
-							Лечение появляется только во второй фазе: в первой
-							игрок учится, что призванных надо убивать, во второй —
-							что сначала надо выйти из-под лечения.
+							Усиление появляется только во второй фазе: в первой игрок
+							учится, что призванных надо убивать, во второй — что часть
+							из них убить нельзя и от них надо уходить.
 						]]
-						kind = "HealField",
+						kind = "BuffField",
 						telegraph = 0.9,
 						cooldown = 11,
 						damage = 0,
 						radius = 20,
 						duration = 8,
 						tickInterval = 1,
-						heal = 14,
+						buffSeconds = 5,
 					},
 					{
 						kind = "PoisonField",
@@ -183,8 +221,16 @@ local definitions: { BossDef } = {
 						radius = 18,
 						duration = 14,
 						tickInterval = 1,
+						areaCount = 3,
 					},
-					{ kind = "Shockwave", telegraph = 0.9, cooldown = 6.5, damage = 26, radius = 30, speed = 50 },
+					{
+						kind = "HillArcher",
+						telegraph = 1.2,
+						cooldown = 60,
+						damage = 0,
+						radius = 10,
+						summonKey = "GoblinArcher",
+					},
 				},
 			},
 		},
@@ -249,6 +295,28 @@ for index, def in definitions do
 	assert(Bosses.ByKey[def.key] == nil, `[Bosses] Дубликат ключа "{def.key}"`)
 	Bosses.ByKey[def.key] = def
 
+	--[[
+		Пятно модели обязано совпасть с боевым радиусом.
+
+		Это тот же инвариант, что «геометрия телеграфа совпадает с геометрией
+		удара», только с другой стороны: игрок уворачивается по картинке, а
+		сервер считает касание по radius. Модель шире радиуса — босс бьёт
+		сквозь собственное тело; у́же — задевает воздухом.
+
+		Допуск в 15% нужен на неровный силуэт: у слизня край юбки и есть
+		граница, а вот у шамана шире всего облетающие руны, и требовать
+		от них точного совпадения с радиусом бессмысленно.
+	]]
+	if def.modelKey then
+		local model = Models.ByKey[def.modelKey]
+		assert(model ~= nil, `[Bosses] У "{def.key}" неизвестная модель "{def.modelKey}"`)
+		assert(
+			math.abs(model.footprint - def.radius) <= def.radius * 0.15,
+			`[Bosses] У "{def.key}" пятно модели {string.format("%.1f", model.footprint)} `
+				.. `не сходится с боевым радиусом {def.radius}`
+		)
+	end
+
 	assert(#def.phases > 0, `[Bosses] У "{def.key}" нет ни одной фазы`)
 	assert(
 		def.phases[#def.phases].healthAbove == 0,
@@ -278,7 +346,18 @@ for index, def in definitions do
 			)
 			if attack.kind == "Summon" then
 				assert(attack.count ~= nil, `[Bosses] "{def.key}", фаза {phaseIndex}: Summon без count`)
-			elseif attack.kind == "HealField" or attack.kind == "PoisonField" then
+			elseif attack.kind == "HillArcher" then
+				--[[
+					Стрелок босса стреляет тем же, чем обычный гоблин-лучник:
+					набор снаряда берётся из его определения по этому ключу.
+					Ключ без дальнобойности — это стрелок, который не стреляет.
+				]]
+				local summoned = if attack.summonKey then Enemies.ByKey[attack.summonKey] else nil
+				assert(
+					summoned ~= nil and summoned.ranged ~= nil,
+					`[Bosses] "{def.key}", фаза {phaseIndex}: HillArcher без дальнобойного summonKey`
+				)
+			elseif attack.kind == "BuffField" or attack.kind == "PoisonField" then
 				assert(
 					attack.duration ~= nil and attack.duration > 0,
 					`[Bosses] "{def.key}", фаза {phaseIndex}: {attack.kind} без длительности`
@@ -287,15 +366,19 @@ for index, def in definitions do
 					attack.tickInterval ~= nil and attack.tickInterval > 0,
 					`[Bosses] "{def.key}", фаза {phaseIndex}: {attack.kind} без интервала тика`
 				)
-				if attack.kind == "HealField" then
+				if attack.kind == "BuffField" then
 					assert(
-						attack.heal ~= nil and attack.heal > 0,
-						`[Bosses] "{def.key}", фаза {phaseIndex}: лечащее поле никого не лечит`
+						attack.buffSeconds ~= nil and attack.buffSeconds > 0,
+						`[Bosses] "{def.key}", фаза {phaseIndex}: поле усиления никого не усиливает`
 					)
 				else
 					assert(
 						attack.damage > 0,
 						`[Bosses] "{def.key}", фаза {phaseIndex}: ядовитое поле не наносит урона`
+					)
+					assert(
+						(attack.areaCount or 1) >= 1,
+						`[Bosses] "{def.key}", фаза {phaseIndex}: areaCount меньше единицы`
 					)
 				end
 			else

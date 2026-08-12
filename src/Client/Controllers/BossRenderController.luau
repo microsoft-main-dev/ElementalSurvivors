@@ -7,6 +7,13 @@
 	«ноль Instance.new в бою» касается и одной детали: правило существует, чтобы
 	не думать каждый раз, много это или мало.
 
+	Отсюда же собираются модели ВСЕХ боссов сразу, а не одна нужная: какой босс
+	будет на уровне, известно только в момент спавна, а спавн — это уже бой.
+	Их всего две по десятку деталей, и стоят они меньше, чем одна волна врагов.
+
+	Босс без modelKey остаётся одной деталью по def.model — этот путь живой,
+	по нему рисуются архетипы, которым модель ещё не нарисовали.
+
 	Позиция приходит с сервера десять раз в секунду и сглаживается интерполяцией.
 	Своей симуляции у босса на клиенте нет — в отличие от толпы, где она нужна
 	ради трафика, здесь сущность одна и точные десять пакетов в секунду дешевле,
@@ -24,12 +31,23 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Bosses = require(Shared.Config.Bosses)
+local Models = require(Shared.Config.Models)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
+local PartModel = require(Shared.Util.PartModel)
 
 -- Сколько телеграфов может висеть одновременно. Атака у босса одна за раз,
 -- запас — на случай наложения конца одной и начала другой.
 local TELEGRAPH_POOL = 10
+
+--[[
+	Сколько стрелков на колоннах может быть нарисовано разом.
+
+	Они появляются раз в минуту и не умирают до конца боссфайта, так что
+	это ещё и потолок длины боя, за которым новые перестанут показываться:
+	двенадцать штук — это двенадцать минут, а таких боёв не бывает.
+]]
+local ARCHER_POOL = 12
 
 --[[
 	Сколько заполненная область держится после удара. Без этой задержки момент
@@ -70,6 +88,18 @@ local player = Players.LocalPlayer
 local bossPart: BasePart? = nil
 local telegraphs: { Telegraph } = {}
 
+-- Собранные модели по ключу из Config/Models и та из них, что сейчас на арене.
+local models: { [string]: PartModel.Built } = {}
+local activeModel: PartModel.Built? = nil
+
+--[[
+	Стрелки на колоннах. Единственное в бою, что стоит НАД полом: у врагов
+	Y всегда ноль, а этот сидит на верхушке. Позиция приходит один раз при
+	появлении и больше не меняется — он не двигается вовсе.
+]]
+local archerParts: { BasePart } = {}
+local archerCount = 0
+
 local origin = Vector3.zero
 local active = false
 
@@ -77,6 +107,17 @@ local active = false
 local targetPosition = Vector3.zero
 local drawnPosition = Vector3.zero
 local bobPhase = 0
+
+--[[
+	Куда модель смотрит. У одной детали переда нет, а у модели он есть: лицо
+	шамана и глаза слизня обязаны быть повёрнуты по ходу движения, иначе босс
+	читается как декорация, которую тащит вбок.
+
+	Направление берётся из СВОЕГО движения на экране, а не с сервера: серверу
+	разворот босса не нужен вовсе, он бьёт по кругу и по прицелу, и слать
+	ради картинки ещё одно поле десять раз в секунду незачем.
+]]
+local facing = Vector3.new(0, 0, -1)
 
 local health = 0
 local maxHealth = 1
@@ -101,6 +142,25 @@ local function build(): ()
 	folder.Parent = Workspace
 
 	bossPart = makePart("Boss", folder)
+
+	--[[
+		Цвет здесь любой: тинты выставляются на спавне по стихии босса
+		(SetTints). Одна и та же модель может достаться боссам разных стихий,
+		и красить её при сборке было бы решением, принятым слишком рано.
+	]]
+	local tints = PartModel.TintsFor(Palette.Element.Nature, Palette.Model.accent)
+	for _, def in Models.List do
+		models[def.key] = PartModel.Build(def, tints, folder)
+	end
+
+	for index = 1, ARCHER_POOL do
+		local part = makePart(`Archer{index}`, folder)
+		part.Shape = Enum.PartType.Ball
+		part.Size = Vector3.new(3, 3.6, 3)
+		part.Material = Enum.Material.SmoothPlastic
+		part.Color = Palette.Element.Dark
+		archerParts[index] = part
+	end
 
 	--[[
 		У каждого телеграфа две детали: контур показывает всю область сразу,
@@ -138,6 +198,20 @@ local function hideAll(): ()
 	if part then
 		part.Transparency = 1
 	end
+
+	local model = activeModel
+	if model then
+		model.SetVisible(false)
+		activeModel = nil
+	end
+
+	-- Стрелки уходят вместе с боссом: неуязвимость держалась ровно до его
+	-- смерти, и оставшийся на колонне силуэт обещал бы бой, которого нет.
+	for index = 1, archerCount do
+		archerParts[index].Transparency = 1
+	end
+	archerCount = 0
+
 	for _, entry in telegraphs do
 		hideTelegraph(entry)
 	end
@@ -260,14 +334,41 @@ local function onEvent(payload: { [string]: any }): ()
 			return
 		end
 
-		part.Size = def.model.size
-		part.Color = Palette.Element[def.element]
-		part.Material = if def.model.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
-		part.Shape = if def.model.shape == "Ball" then Enum.PartType.Ball else Enum.PartType.Block
-		part.Transparency = 0
+		--[[
+			Предыдущая модель гасится ДО показа новой. Босс за забег один, но
+			отладочные кнопки в лобби выводят их подряд, и оставленная на арене
+			модель прошлого босса — ровно тот же класс ошибки, что брошенные
+			части врагов от перепутанного порядка событий.
+		]]
+		local previous = activeModel
+		if previous then
+			previous.SetVisible(false)
+			activeModel = nil
+		end
+
+		local model = if def.modelKey then models[def.modelKey] else nil
+		if model then
+			--[[
+				Стихия красит модель, если у неё нет своего цвета. Свой нужен
+				там, где стихия про урон, а не про облик: гоблин-шаман бьёт
+				тьмой, но фиолетовым он выглядит роботом.
+			]]
+			local base = Palette.Model.bases[def.modelKey :: string] or Palette.Element[def.element]
+			model.SetTints(PartModel.TintsFor(base, Palette.Model.accent))
+			model.SetVisible(true)
+			activeModel = model
+			part.Transparency = 1
+		else
+			part.Size = def.model.size
+			part.Color = Palette.Element[def.element]
+			part.Material = if def.model.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+			part.Shape = if def.model.shape == "Ball" then Enum.PartType.Ball else Enum.PartType.Block
+			part.Transparency = 0
+		end
 
 		targetPosition = Vector3.new(payload.x, 0, payload.z)
 		drawnPosition = targetPosition
+		facing = Vector3.new(0, 0, -1)
 		health = payload.maxHealth
 		maxHealth = payload.maxHealth
 		active = true
@@ -277,6 +378,22 @@ local function onEvent(payload: { [string]: any }): ()
 	if kind == "Despawn" then
 		active = false
 		hideAll()
+		return
+	end
+
+	--[[
+		Стрелок сел на колонну. Позиция приходит один раз: он не двигается
+		и не умирает до конца боссфайта, поэтому обновлять её нечем и незачем.
+	]]
+	if kind == "Archer" then
+		if archerCount >= ARCHER_POOL then
+			return
+		end
+
+		archerCount += 1
+		local part = archerParts[archerCount]
+		part.CFrame = CFrame.new(origin + Vector3.new(payload.x, payload.y + part.Size.Y * 0.5, payload.z))
+		part.Transparency = 0
 		return
 	end
 
@@ -301,12 +418,13 @@ local function onEvent(payload: { [string]: any }): ()
 		Стойкое поле шамана. Круг живёт столько же, сколько на сервере: остаток
 		клиент отсчитывает сам, поэтому по сети он приходит ровно один раз.
 
-		Лечение и яд отличаются цветом, и это не украшение: игрок обязан с
-		первого взгляда понимать, из какого круга надо выйти, а в какой
-		нельзя пускать толпу.
+		Усиление и яд отличаются цветом, и это не украшение: игрок обязан с
+		первого взгляда понимать, из какого круга надо выйти самому, а в какой
+		нельзя пускать толпу. Круг усиления «безвреден» только для него: урона
+		он не наносит, но выходящие из него враги неуязвимы.
 	]]
 	if kind == "Field" then
-		local harmless = payload.field == "Heal"
+		local harmless = payload.field == "Buff"
 		showTelegraph("Circle", payload.x, payload.z, 1, 0, payload.radius, 0, 0, payload.duration, harmless, true)
 		return
 	end
@@ -343,8 +461,38 @@ local function onHeartbeat(deltaTime: number): ()
 		чтобы движение читалось плавным, но босс не «плыл» заметно позади
 		своей настоящей позиции: урон считает сервер по ней, а не по картинке.
 	]]
+	local previousDrawn = drawnPosition
 	local alpha = math.min(deltaTime * 12, 1)
 	drawnPosition = drawnPosition:Lerp(targetPosition, alpha)
+
+	local model = activeModel
+	if model then
+		--[[
+			Разворот берётся из пройденного за кадр пути. Порог обязателен:
+			на стоящем боссе интерполяция даёт дрожание в тысячные доли студа,
+			и модель крутилась бы на месте вокруг своей оси.
+		]]
+		local moved = drawnPosition - previousDrawn
+		if moved.Magnitude > 0.01 then
+			local turned = facing:Lerp(moved.Unit, math.min(deltaTime * 6, 1))
+			-- На развороте ровно назад промежуточный вектор проходит через ноль,
+			-- и Unit от него — NaN. Такой кадр разворот просто пропускает.
+			facing = if turned.Magnitude > 1e-3 then turned.Unit else moved.Unit
+		end
+
+		--[[
+			Скорость берётся из НАРИСОВАННОГО пути, а не из серверной: ноги
+			обязаны совпадать с той картинкой, которая на экране. Возьми мы
+			скорость из конфига фазы — сглаженный босс скользил бы в те кадры,
+			когда интерполяция его придерживает.
+		]]
+		local speed = if deltaTime > 0 then moved.Magnitude / deltaTime else 0
+
+		-- Пивот модели стоит на полу: offset деталей отсчитан от него же.
+		local ground = origin + Vector3.new(drawnPosition.X, 0, drawnPosition.Z)
+		model.Draw(CFrame.lookAt(ground, ground + facing), deltaTime, speed)
+		return
+	end
 
 	bobPhase = (bobPhase + deltaTime * Balance.Combat.bobSpeed * 0.4) % (math.pi * 2)
 	local bob = math.sin(bobPhase) * 0.6

@@ -26,16 +26,20 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Balance = require(Shared.Config.Balance)
-local DailyPanel = require(script.Parent.Parent.UI.DailyPanel)
 local EggsPanel = require(script.Parent.Parent.UI.EggsPanel)
 local EvolvePanel = require(script.Parent.Parent.UI.EvolvePanel)
 local Icons = require(Shared.Config.Icons)
 local InventoryPanel = require(script.Parent.Parent.UI.InventoryPanel)
+local LeaderboardPanel = require(script.Parent.Parent.UI.LeaderboardPanel)
+local LobbyDecorController = require(script.Parent.LobbyDecorController)
+local Models = require(Shared.Config.Models)
 local Net = require(Shared.Net)
 local OfflinePanel = require(script.Parent.Parent.UI.OfflinePanel)
 local Palette = require(Shared.Config.Palette)
+local PartModel = require(Shared.Util.PartModel)
 local Pets = require(Shared.Config.Pets)
+local Props = require(Shared.Config.Props)
+local QuestsPanel = require(script.Parent.Parent.UI.QuestsPanel)
 local SettingsPanel = require(script.Parent.Parent.UI.SettingsPanel)
 local ShopPanel = require(script.Parent.Parent.UI.ShopPanel)
 local StagePanel = require(script.Parent.Parent.UI.StagePanel)
@@ -43,6 +47,7 @@ local StorePanel = require(script.Parent.Parent.UI.StorePanel)
 local TalentsPanel = require(script.Parent.Parent.UI.TalentsPanel)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.Parent.UI.UiKit)
+local WheelPanel = require(script.Parent.Parent.UI.WheelPanel)
 
 local BUTTON_WIDTH = 116
 local BUTTON_GAP = 8
@@ -60,7 +65,9 @@ local shopPanel: ShopPanel.Panel? = nil
 local talentsPanel: TalentsPanel.Panel? = nil
 local offlinePanel: OfflinePanel.Panel? = nil
 local stagePanel: StagePanel.Panel? = nil
-local dailyPanel: DailyPanel.Panel? = nil
+local questsPanel: QuestsPanel.Panel? = nil
+local leaderboardPanel: LeaderboardPanel.Panel? = nil
+local wheelPanel: WheelPanel.Panel? = nil
 local storePanel: StorePanel.Panel? = nil
 local settingsPanel: SettingsPanel.Panel? = nil
 
@@ -72,7 +79,8 @@ local questsView: Types.QuestsView? = nil
 local storeView: Types.StoreView? = nil
 local leaderboard: { Types.LeaderboardEntry } = {}
 
-local petModel: BasePart? = nil
+local petModel: PartModel.Built? = nil
+local petHeight = 0
 local petSpin = 0
 local inRun = false
 
@@ -163,9 +171,24 @@ local function refreshPanels(): ()
 		stage.Refresh(if profileView then profileView.storyStage else 1, tutorialPending)
 	end
 
-	local daily = dailyPanel
-	if daily then
-		daily.Refresh(questsView, leaderboard)
+	local quests = questsPanel
+	if quests then
+		quests.Refresh(questsView)
+	end
+
+	local records = leaderboardPanel
+	if records then
+		records.Refresh(leaderboard)
+	end
+
+	--[[
+		Кулдаун колеса приходит вместе с квестами (Types.QuestsView): и то,
+		и другое ежедневное, и второго пакета ради одного числа не заводилось.
+		Панели теперь разные, а источник по-прежнему один.
+	]]
+	local wheel = wheelPanel
+	if wheel and questsView then
+		wheel.SetReadyIn(questsView.wheelReadyInSeconds)
 	end
 
 	local store = storePanel
@@ -208,9 +231,17 @@ local function closeAll(): ()
 	if stage then
 		stage.Close()
 	end
-	local daily = dailyPanel
-	if daily then
-		daily.Close()
+	local quests = questsPanel
+	if quests then
+		quests.Close()
+	end
+	local records = leaderboardPanel
+	if records then
+		records.Close()
+	end
+	local wheel = wheelPanel
+	if wheel then
+		wheel.Close()
 	end
 	local store = storePanel
 	if store then
@@ -307,12 +338,25 @@ local function openPanel(name: string, target: string?): ()
 		if settings then
 			settings.Open()
 		end
-	elseif name == "Quests" or name == "Wheel" or name == "Leaderboard" then
-		-- Три объекта лобби делят одну панель: у них одинаковая форма,
-		-- а открывается тот раздел, к которому подошёл игрок.
-		local daily = dailyPanel
-		if daily then
-			daily.Open(name)
+	elseif name == "Wheel" then
+		--[[
+			У колеса своё окно, и оно не показывает колесо: настоящее стоит
+			в лобби и крутится по-настоящему. Окно здесь — только кнопка,
+			которая его запускает.
+		]]
+		local wheel = wheelPanel
+		if wheel then
+			wheel.Open()
+		end
+	elseif name == "Quests" then
+		local quests = questsPanel
+		if quests then
+			quests.Open()
+		end
+	elseif name == "Leaderboard" then
+		local records = leaderboardPanel
+		if records then
+			records.Open()
 		end
 	end
 
@@ -365,7 +409,7 @@ end
 local function updatePetModel(): ()
 	local existing = petModel
 	if existing then
-		existing:Destroy()
+		existing.Destroy()
 		petModel = nil
 	end
 
@@ -392,41 +436,49 @@ local function updatePetModel(): ()
 		return
 	end
 
-	local part = Instance.new("Part")
-	part.Name = "EquippedPet"
-	part.Size = def.model.size
-	part.Color = Palette.Element[def.element]
-	part.Material = if def.model.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CanTouch = false
-	part.Massless = true
+	--[[
+		Тем же сборщиком и той же моделью, что бегает рядом с игроком.
 
-	if def.model.shape == "Ball" then
-		part.Shape = Enum.PartType.Ball
-	elseif def.model.shape == "Cylinder" then
-		part.Shape = Enum.PartType.Cylinder
+		Раньше стенд рисовал свою заглушку — шар цвета стихии, — и она осталась
+		от версии, где никаких моделей не было вовсе. Питомец на стенде обязан
+		быть тем же зверем, что и спутник: это одна вещь, показанная дважды.
+	]]
+	local modelDef = if def.model.modelKey then Models.ByKey[def.model.modelKey] else nil
+	if not modelDef then
+		return
 	end
 
-	part.Parent = Workspace
-	petModel = part
+	local base = Palette.Model.bases[def.key] or Palette.Element[def.element]
+	local built = PartModel.Build(modelDef, PartModel.TintsFor(base, Palette.Model.accent), Workspace)
+	built.SetVisible(true)
+	petModel = built
+	petHeight = modelDef.height
 end
 
 -- Точка стенда считается из того же числа, что и на сервере (см. LobbyService).
 local function petStandPosition(): Vector3
-	return Vector3.new(-Balance.Lobby.petStandOffset, 6, 0)
+	-- Точка приходит из Config/Props: там же стоит сама тумба.
+	return Props.PetStand
 end
 
 local function onHeartbeat(deltaTime: number): ()
-	local part = petModel
-	if not part then
+	local built = petModel
+	if not built then
 		return
 	end
 
 	petSpin = (petSpin + deltaTime * PET_SPIN_SPEED) % 1
 	local bob = math.sin(petSpin * math.pi * 2) * 0.4
-	part.CFrame = CFrame.new(petStandPosition() + Vector3.new(0, bob, 0)) * CFrame.Angles(0, petSpin * math.pi * 2, 0)
+
+	--[[
+		Пивот модели стоит на полу, а точка стенда указывает в середину
+		питомца: опускаем на полвысоты, иначе зверь висит над тумбой.
+
+		Скорость нулевая: на стенде питомец крутится, а не идёт.
+	]]
+	local pivot = CFrame.new(petStandPosition() + Vector3.new(0, bob - petHeight * 0.5, 0))
+		* CFrame.Angles(0, petSpin * math.pi * 2, 0)
+	built.Draw(pivot, deltaTime, 0)
 end
 
 local function buildBar(): ()
@@ -475,7 +527,6 @@ local function buildBar(): ()
 		{ name = "Eggs", text = "Eggs", icon = "Eggs" },
 		{ name = "Shop", text = "Shop", icon = "Shop" },
 		{ name = "Talents", text = "Talents", icon = "Talents" },
-		{ name = "Quests", text = "Daily", icon = "Daily" },
 		{ name = "Store", text = "Store", icon = "Store" },
 		{ name = "Settings", text = "Settings", icon = "Settings" },
 	}
@@ -511,11 +562,11 @@ local function setVisible(visible: boolean): ()
 		closeAll()
 	end
 
-	local part = petModel
-	if part then
-		-- В бою стенд лобби всё равно за пять тысяч стадов отсюда, но
-		-- невидимая деталь не должна занимать место в рендере.
-		part.Transparency = if visible then 0 else 1
+	local built = petModel
+	if built then
+		-- В бою стенд лобби всё равно за пять тысяч стадов отсюда, но сотня
+		-- невидимых деталей не должна занимать место в рендере.
+		built.SetVisible(visible)
 	end
 end
 
@@ -534,7 +585,9 @@ function LobbyController.Start(): ()
 	talentsPanel = TalentsPanel.Build(playerGui, send)
 	offlinePanel = OfflinePanel.Build(playerGui, send)
 	stagePanel = StagePanel.Build(playerGui, send)
-	dailyPanel = DailyPanel.Build(playerGui, send)
+	questsPanel = QuestsPanel.Build(playerGui, send)
+	leaderboardPanel = LeaderboardPanel.Build(playerGui)
+	wheelPanel = WheelPanel.Build(playerGui, send)
 	-- Витрине send не нужен: покупка идёт мимо сервера, прямо в Roblox.
 	storePanel = StorePanel.Build(playerGui)
 	settingsPanel = SettingsPanel.Build(playerGui, send)
@@ -595,13 +648,26 @@ function LobbyController.Start(): ()
 
 	Net.GetEvent(Net.Id.LeaderboardView).OnClientEvent:Connect(function(top: { Types.LeaderboardEntry })
 		leaderboard = top
+		-- Тот же список идёт на таблички подиума: данные уже пришли, и второго
+		-- канала ради трёх строк заводить не нужно.
+		LobbyDecorController.SetLeaderboard(top)
 		refreshPanels()
 	end)
 
 	Net.GetEvent(Net.Id.WheelResult).OnClientEvent:Connect(function(result: Types.WheelResult)
-		local daily = dailyPanel
-		if daily then
-			daily.ShowSpin(result)
+		--[[
+			Крутятся ДВА колеса сразу: настоящее в лобби и нарисованное в окне.
+			Оба идут ровно столько, сколько длится звук (Config/Sounds), и
+			называют один и тот же приз, который сервер уже решил.
+
+			Второй канал тут не заводится: номер приза приходит одним пакетом,
+			а кто как его показывает — их собственное дело.
+		]]
+		LobbyDecorController.SpinWheel(result.prizeIndex)
+
+		local wheel = wheelPanel
+		if wheel then
+			wheel.ShowResult(result)
 		end
 	end)
 
