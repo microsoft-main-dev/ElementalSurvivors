@@ -12,6 +12,7 @@
 	В M1 работают архетипы Chaser и Swarm; остальные появятся в M6 вместе с боссами.
 ]]
 
+local Models = require(script.Parent.Models)
 local Palette = require(script.Parent.Palette)
 local Types = require(script.Parent.Parent.Types)
 
@@ -186,6 +187,7 @@ local definitions: { EnemyDef } = {
 	{
 		key = "GoblinSwordsman",
 		typeId = 0,
+		modelKey = "GoblinSwordsman",
 		displayName = "Goblin Swordsman",
 		archetype = "Chaser",
 		element = "Dark",
@@ -234,6 +236,7 @@ local definitions: { EnemyDef } = {
 	{
 		key = "GoblinArcher",
 		typeId = 0,
+		modelKey = "GoblinArcher",
 		displayName = "Goblin Archer",
 		archetype = "Ranged",
 		element = "Dark",
@@ -313,6 +316,18 @@ for index, def in definitions do
 		ровно то, что замерено на живом забеге с тремя сотнями слизней.
 		Четвёртая никем не проверена, и разрешать её тихо нельзя.
 	]]
+	--[[
+		Ключ модели обязан существовать. Опечатка иначе не проявится никак:
+		враг просто продолжит ходить одной деталью, и это выглядит как
+		«модель не сделали», а не как ошибка.
+	]]
+	if def.modelKey then
+		assert(
+			Models.ByKey[def.modelKey] ~= nil,
+			`[Enemies] У "{def.key}" неизвестная модель "{def.modelKey}"`
+		)
+	end
+
 	local parts = def.model.parts
 	if parts then
 		assert(#parts <= MAX_PARTS, `[Enemies] У "{def.key}" деталей больше {MAX_PARTS}`)

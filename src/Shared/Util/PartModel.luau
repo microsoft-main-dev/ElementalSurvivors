@@ -19,6 +19,12 @@
 	от времени — получили бы либо ноги, перебирающие на месте, либо шаг
 	не в такт движению.
 
+	ЛЕНТА И ИСКРЫ (поля trail и particles у детали). Trail и ParticleEmitter —
+	объекты движка, а не ассеты: ни картинки, ни загрузки им не нужно, и
+	правило про сторонние ассеты их не касается. Собираются один раз вместе
+	с деталью, дальше только включаются и выключаются вместе с моделью —
+	создавать их в бою нельзя ровно так же, как и детали.
+
 	Публичный API:
 		PartModel.TintsFor(base, accent) -> Tints
 		PartModel.Build(def, tints, parent) -> Built
@@ -64,6 +70,21 @@ export type Built = {
 	Height: () -> number,
 	Footprint: () -> number,
 	Destroy: () -> (),
+}
+
+--[[
+	Лента и искры хранятся вместе со своим описанием: смена палитры носителя
+	обязана перекрасить и их, а собрать градиент заново можно только из тех же
+	ролей, из которых он собирался в первый раз.
+]]
+type TrailEntry = {
+	trail: Trail,
+	def: Types.ModelTrailDef,
+}
+
+type ParticleEntry = {
+	emitter: ParticleEmitter,
+	def: Types.ModelParticlesDef,
 }
 
 type Entry = {
@@ -129,6 +150,18 @@ local function colorOf(tints: Tints, partDef: ModelPartDef): Color3
 	return partDef.paint or tintOf(tints, partDef.tint)
 end
 
+--[[
+	Раскрасить ленту: переход от цвета у детали к цвету на излёте.
+
+	Смысл ленты именно в переходе. Одноцветная лента — это та же палка,
+	которой эффекты и были до сих пор, только волочащаяся следом.
+]]
+local function paintTrail(entry: TrailEntry, tints: Tints): ()
+	local head = tintOf(tints, entry.def.tint)
+	local tail = tintOf(tints, entry.def.tailTint or entry.def.tint)
+	entry.trail.Color = ColorSequence.new(head, tail)
+end
+
 function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 	local folder = Instance.new("Folder")
 	folder.Name = `Model_{def.key}`
@@ -140,6 +173,8 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 	local moveParts: { BasePart } = {}
 	local moveCFrames: { CFrame } = {}
 	local pulsed: { Entry } = {}
+	local trails: { TrailEntry } = {}
+	local particles: { ParticleEntry } = {}
 	--[[
 		glow трогает прозрачность, а не геометрию, поэтому идёт отдельным
 		списком и в BulkMoveTo не участвует вовсе. Списки не пересекаются:
@@ -204,6 +239,93 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 			light.Color = part.Color
 			light.Shadows = false
 			light.Parent = part
+		end
+
+		--[[
+			Лента за деталью. Две точки привязки задают её ширину, и вертикаль
+			здесь не случайна: лента, натянутая поперёк движения, читается
+			хвостом, а натянутая вдоль — схлопывается в нитку.
+
+			Выключена до показа модели, как и всё остальное: собранная модель
+			висит невидимой до спавна и хвостом по арене мести не должна.
+		]]
+		local trailDef = partDef.trail
+		if trailDef then
+			local half = trailDef.length * 0.5
+
+			local top = Instance.new("Attachment")
+			top.Position = Vector3.new(0, half, 0)
+			top.Parent = part
+
+			local bottom = Instance.new("Attachment")
+			bottom.Position = Vector3.new(0, -half, 0)
+			bottom.Parent = part
+
+			local trail = Instance.new("Trail")
+			trail.Attachment0 = top
+			trail.Attachment1 = bottom
+			trail.Lifetime = trailDef.lifetime
+			trail.FaceCamera = true
+			--[[
+				Лента светится, но не выжигает себя добела. Единица означает
+				«свети своим цветом поверх всего», и на ярких стихиях лента
+				от этого теряет цвет целиком: жёлтая полоса становится белой.
+			]]
+			trail.LightEmission = 0.5
+			trail.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, trailDef.transparency or 0),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			trail.Enabled = false
+			trail.Parent = part
+
+			local entry: TrailEntry = { trail = trail, def = trailDef }
+			paintTrail(entry, tints)
+			table.insert(trails, entry)
+		end
+
+		--[[
+			Искры. Текстура не задаётся: встроенная в движок годится, а любая
+			другая была бы загруженным ассетом.
+
+			Rate — постоянный поток, а не залп: искры принадлежат телу, которое
+			живёт, пока живёт способность, и вспышками тут управлять нечем.
+		]]
+		local particlesDef = partDef.particles
+		if particlesDef then
+			local spread = particlesDef.spread or 0
+			local emitter = Instance.new("ParticleEmitter")
+			--[[
+				Путь rbxasset — файл внутри самого движка, а не загруженный
+				ассет: номера у него нет, модерация ему не грозит. Проставлен
+				явно, хотя он же и стоит по умолчанию: молчаливая зависимость
+				от значения по умолчанию — это невидимые искры в тот день,
+				когда Roblox его поменяет.
+			]]
+			emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			emitter.Rate = particlesDef.rate
+			emitter.Lifetime = NumberRange.new(particlesDef.lifetime * 0.6, particlesDef.lifetime)
+			emitter.Speed = NumberRange.new(particlesDef.speed * 0.5, particlesDef.speed)
+			emitter.SpreadAngle = Vector2.new(spread, spread)
+			emitter.Acceleration = Vector3.new(0, particlesDef.rise or 0, 0)
+			emitter.Color = ColorSequence.new(tintOf(tints, particlesDef.tint))
+			-- Искра гаснет, уменьшаясь: обрыв на полном размере читается
+			-- морганием, а не затуханием.
+			emitter.Size = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, particlesDef.size),
+				NumberSequenceKeypoint.new(1, 0),
+			})
+			emitter.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.1),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			-- По той же причине, что у ленты: искры на светлой стихии
+			-- сливаются в белое облако, если светятся в полную силу.
+			emitter.LightEmission = 0.4
+			emitter.Enabled = false
+			emitter.Parent = part
+
+			table.insert(particles, { emitter = emitter, def = particlesDef })
 		end
 
 		local meshType = if partDef.mesh then MESHES[partDef.mesh] else nil
@@ -364,6 +486,23 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 		for _, entry in entries do
 			entry.part.Transparency = if value then entry.transparency else 1
 		end
+
+		for _, entry in trails do
+			--[[
+				Лента помнит пройденный путь и НЕ забывает его, пока не истёк
+				lifetime. Тело, взятое из пула в другой точке арены, дорисовало
+				бы полосу от места, где его спрятали, до места, где показали, —
+				через пол-арены. Отсюда Clear перед показом.
+			]]
+			if value then
+				entry.trail:Clear()
+			end
+			entry.trail.Enabled = value
+		end
+
+		for _, entry in particles do
+			entry.emitter.Enabled = value
+		end
 	end
 
 	function api.SetTimeScale(scale: number): ()
@@ -376,6 +515,14 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 			if entry.def.paint == nil then
 				entry.part.Color = tintOf(value, entry.def.tint)
 			end
+		end
+
+		for _, entry in trails do
+			paintTrail(entry, value)
+		end
+
+		for _, entry in particles do
+			entry.emitter.Color = ColorSequence.new(tintOf(value, entry.def.tint))
 		end
 	end
 
@@ -394,6 +541,8 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 		table.clear(moveCFrames)
 		table.clear(pulsed)
 		table.clear(glowing)
+		table.clear(trails)
+		table.clear(particles)
 	end
 
 	return api

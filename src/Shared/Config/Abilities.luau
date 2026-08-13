@@ -44,6 +44,7 @@
 ]]
 
 local Balance = require(script.Parent.Balance)
+local Models = require(script.Parent.Models)
 local Types = require(script.Parent.Parent.Types)
 
 type AbilityBonuses = Types.AbilityBonuses
@@ -70,6 +71,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 8, cooldown = 0.5, count = 2, radius = 8, hitRadius = 4.2, angularSpeed = 3 },
 		growth = { damage = 1.18, cooldown = 0.96 },
 		milestone = { kind = "Count", amount = 1 },
+		fx = { body = "FxFireOrbit" },
 	},
 	{
 		key = "IceShard",
@@ -82,6 +84,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 18, cooldown = 1.1, count = 1, speed = 75, lifetime = 1.3, pierce = 1, hitRadius = 2 },
 		growth = { damage = 1.18, cooldown = 0.95 },
 		milestone = { kind = "Count", amount = 2 },
+		fx = { body = "FxIceShard" },
 	},
 	{
 		key = "ThornAura",
@@ -94,6 +97,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 6, cooldown = 0.6, radius = 12 },
 		growth = { damage = 1.2, cooldown = 0.96 },
 		milestone = { kind = "Radius", amount = 3 },
+		fx = { body = "FxThornAura" },
 	},
 	{
 		key = "StormNova",
@@ -106,6 +110,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 22, cooldown = 3, radius = 17 },
 		growth = { damage = 1.2, cooldown = 0.95 },
 		milestone = { kind = "Radius", amount = 4 },
+		fx = { body = "FxStormNova", burst = 22 },
 	},
 	{
 		key = "ShadowNeedle",
@@ -118,6 +123,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 9, cooldown = 0.95, count = 2, speed = 100, lifetime = 0.9, pierce = 1, hitRadius = 1.6 },
 		growth = { damage = 1.17, cooldown = 0.95 },
 		milestone = { kind = "Count", amount = 2 },
+		fx = { body = "FxShadowNeedle" },
 	},
 	{
 		key = "LightBurst",
@@ -130,6 +136,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 34, cooldown = 4.5, radius = 11 },
 		growth = { damage = 1.21, cooldown = 0.95 },
 		milestone = { kind = "Radius", amount = 3 },
+		fx = { body = "FxLightBurst", burst = 26 },
 	},
 
 	--[[
@@ -155,6 +162,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 16, cooldown = 1.6, count = 3, radius = 16, falloff = 0.8 },
 		growth = { damage = 1.18, cooldown = 0.95 },
 		milestone = { kind = "Count", amount = 1 },
+		fx = { body = "FxChainSpark", burst = 8, beam = 0.45 },
 	},
 	{
 		key = "WingGust",
@@ -167,6 +175,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 14, cooldown = 1.2, radius = 18, angle = 110 },
 		growth = { damage = 1.18, cooldown = 0.95 },
 		milestone = { kind = "Radius", amount = 4 },
+		fx = { body = "FxWingGust", burst = 20 },
 	},
 	{
 		key = "MoteHalo",
@@ -179,6 +188,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 5, cooldown = 0.35, count = 4, radius = 7, hitRadius = 3, angularSpeed = 4.5 },
 		growth = { damage = 1.17, cooldown = 0.96 },
 		milestone = { kind = "Count", amount = 1 },
+		fx = { body = "FxMoteHalo" },
 	},
 	{
 		key = "EmberTrail",
@@ -191,6 +201,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 10, cooldown = 0.5, radius = 10 },
 		growth = { damage = 1.2, cooldown = 0.95 },
 		milestone = { kind = "Radius", amount = 3 },
+		fx = { body = "FxEmberTrail" },
 	},
 	{
 		key = "FrostBurst",
@@ -203,6 +214,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 46, cooldown = 4, radius = 22 },
 		growth = { damage = 1.21, cooldown = 0.95 },
 		milestone = { kind = "Radius", amount = 5 },
+		fx = { body = "FxFrostBurst", burst = 30 },
 	},
 	{
 		key = "StormArc",
@@ -215,6 +227,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 26, cooldown = 1.5, count = 5, radius = 24, falloff = 0.88 },
 		growth = { damage = 1.19, cooldown = 0.95 },
 		milestone = { kind = "Count", amount = 2 },
+		fx = { body = "FxStormArc", burst = 12, beam = 0.8 },
 	},
 	{
 		key = "VoidFangs",
@@ -227,6 +240,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 22, cooldown = 0.7, count = 2, radius = 10, hitRadius = 5.5, angularSpeed = 2.2 },
 		growth = { damage = 1.19, cooldown = 0.96 },
 		milestone = { kind = "Count", amount = 1 },
+		fx = { body = "FxVoidFangs" },
 	},
 	{
 		key = "SolarFlare",
@@ -239,6 +253,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 40, cooldown = 1.8, radius = 34, angle = 45 },
 		growth = { damage = 1.2, cooldown = 0.95 },
 		milestone = { kind = "Radius", amount = 6 },
+		fx = { body = "FxSolarFlare", burst = 24 },
 	},
 	{
 		key = "SeedVolley",
@@ -251,6 +266,7 @@ local definitions: { AbilityDef } = {
 		base = { damage = 30, cooldown = 1, count = 2, speed = 85, lifetime = 1.5, pierce = 4, hitRadius = 2.4 },
 		growth = { damage = 1.19, cooldown = 0.95 },
 		milestone = { kind = "Count", amount = 2 },
+		fx = { body = "FxSeedVolley" },
 	},
 }
 
@@ -466,6 +482,43 @@ for index, def in definitions do
 	end
 
 	assert(def.milestone.amount > 0, `[Abilities] "{def.key}": рубеж без прибавки`)
+
+	--[[
+		Тело способности обязано существовать в Config/Models.
+
+		Ключ, набранный с опечаткой, иначе не проявится никак: способность
+		просто продолжит рисоваться прежней неоновой деталью, и это выглядит
+		как «тело не сделали», а не как ошибка. Проверка ровно та же, что
+		у Config/Icons с его девяноста номерами.
+	]]
+	local fx = assert(def.fx, `[Abilities] "{def.key}": нет описания вида (fx)`)
+	local body = assert(fx.body, `[Abilities] "{def.key}": не задано тело`)
+	assert(Models.ByKey[body] ~= nil, `[Abilities] "{def.key}": тела "{body}" нет в Config/Models`)
+
+	--[[
+		Мгновенным формам искры обязательны.
+
+		Вспышка, клин и цепь живут доли секунды. Без искр от них не остаётся
+		ничего: игрок видит мелькнувшую деталь и не понимает, ударило вообще
+		или нет. У постоянных форм искры сыплются из самого тела, и залп
+		на срабатывание им не нужен.
+	]]
+	local instant = def.shape == "Nova" or def.shape == "Cone" or def.shape == "Chain"
+	if instant then
+		assert((fx.burst or 0) > 0, `[Abilities] "{def.key}": мгновенная форма без искр`)
+	else
+		assert(fx.burst == nil, `[Abilities] "{def.key}": залп искр у постоянной формы`)
+	end
+
+	-- Ширина дуги — единственное, чем различаются две молниевые цепи:
+	-- стихия у них одна, то есть и цвет один.
+	if def.shape == "Chain" then
+		assert((fx.beam or 0) > 0, `[Abilities] "{def.key}": цепь без ширины дуги`)
+	else
+		assert(fx.beam == nil, `[Abilities] "{def.key}": ширина дуги у формы {def.shape}`)
+	end
+
+	table.freeze(fx)
 
 	table.freeze(def.base)
 	table.freeze(def.growth)

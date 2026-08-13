@@ -56,11 +56,27 @@ local ARCHER_POOL = 12
 ]]
 local TELEGRAPH_HOLD = 0.15
 
-local OUTLINE_TRANSPARENCY = 0.75
-local FILL_TRANSPARENCY = 0.35
+--[[
+	Контур области вместо полупрозрачного блина.
+
+	Залитый круг поверх пола прятал под собой врагов и кристаллы, а границу
+	показывал хуже, чем ломаная из коротких стенок по самому краю: та же
+	мысль, что у кольца ауры и у волны Nova, и та же геометрия — воксельные
+	отрезки по касательной.
+
+	Восемнадцати хватает: у самой широкой области босса радиус около двенадцати
+	стадов, отрезки выходят чуть больше четырёх, и кольцо читается кругом.
+	Полосе из восемнадцати нужны только четыре — два борта и два торца.
+]]
+local CONTOUR_SEGMENTS = 18
+local CONTOUR_HEIGHT = 1.1
+local CONTOUR_THICK = 0.36
+
+local CONTOUR_TRANSPARENCY = 0.1
+local FILL_TRANSPARENCY = 0.62
 
 type Telegraph = {
-	outline: BasePart,
+	contour: { BasePart },
 	fill: BasePart,
 	shape: string,
 	x: number,
@@ -97,7 +113,7 @@ local activeModel: PartModel.Built? = nil
 	Y всегда ноль, а этот сидит на верхушке. Позиция приходит один раз при
 	появлении и больше не меняется — он не двигается вовсе.
 ]]
-local archerParts: { BasePart } = {}
+local archerModels: { PartModel.Built } = {}
 local archerCount = 0
 
 local origin = Vector3.zero
@@ -149,27 +165,54 @@ local function build(): ()
 		и красить её при сборке было бы решением, принятым слишком рано.
 	]]
 	local tints = PartModel.TintsFor(Palette.Element.Nature, Palette.Model.accent)
-	for _, def in Models.List do
-		models[def.key] = PartModel.Build(def, tints, folder)
-	end
 
-	for index = 1, ARCHER_POOL do
-		local part = makePart(`Archer{index}`, folder)
-		part.Shape = Enum.PartType.Ball
-		part.Size = Vector3.new(3, 3.6, 3)
-		part.Material = Enum.Material.SmoothPlastic
-		part.Color = Palette.Element.Dark
-		archerParts[index] = part
+	--[[
+		Собираются ТОЛЬКО модели боссов, а не весь Config/Models.
+
+		Раньше строился весь список целиком: двенадцать воксельных питомцев,
+		весь реквизит лобби и тела способностей — больше полутора тысяч
+		деталей, из которых на арене нужны две. Невидимые они почти ничего
+		не стоят, но и заводить их незачем, а список с тех пор только рос.
+	]]
+	for _, boss in Bosses.List do
+		local key = boss.modelKey
+		if key and not models[key] then
+			local def = Models.ByKey[key]
+			if def then
+				models[key] = PartModel.Build(def, tints, folder)
+			end
+		end
 	end
 
 	--[[
-		У каждого телеграфа две детали: контур показывает всю область сразу,
-		заливка растёт внутри него до конца показа. Обе создаются один раз
-		при старте — «ноль Instance.new в бою» касается и четырёх деталей.
+		Лучники: та же воксельная модель, что у всего остального в бою, вместо
+		тёмного шара. Палитра тёмная и своя — стрелок принадлежит шаману,
+		а не стихии арены.
+	]]
+	--[[
+		Стрелок на колонне — тот же гоблин-лучник, что бегает в волнах, той же
+		моделью и того же цвета. Стихия у гоблинов Dark, но красить их ею
+		нельзя: фиолетовый гоблин — не гоблин, а робот (Palette.Model.bases).
+	]]
+	local archerDef = Models.ByKey.GoblinArcher
+	local archerTints = PartModel.TintsFor(Palette.Model.bases.GoblinArcher, Palette.Model.accent)
+	for index = 1, ARCHER_POOL do
+		archerModels[index] = PartModel.Build(archerDef, archerTints, folder)
+	end
+
+	--[[
+		Телеграф — контур из отрезков плюс заливка, растущая внутри него
+		до конца показа. Всё создаётся один раз при старте: «ноль Instance.new
+		в бою» касается и этих деталей, а их тут по восемнадцать на область.
 	]]
 	for index = 1, TELEGRAPH_POOL do
+		local contour: { BasePart } = {}
+		for segment = 1, CONTOUR_SEGMENTS do
+			contour[segment] = makePart(`TelegraphEdge{index}_{segment}`, folder)
+		end
+
 		telegraphs[index] = {
-			outline = makePart(`TelegraphOutline{index}`, folder),
+			contour = contour,
 			fill = makePart(`TelegraphFill{index}`, folder),
 			shape = "Circle",
 			x = 0,
@@ -189,8 +232,10 @@ end
 
 local function hideTelegraph(entry: Telegraph): ()
 	entry.active = false
-	entry.outline.Transparency = 1
 	entry.fill.Transparency = 1
+	for _, part in entry.contour do
+		part.Transparency = 1
+	end
 end
 
 local function hideAll(): ()
@@ -208,7 +253,7 @@ local function hideAll(): ()
 	-- Стрелки уходят вместе с боссом: неуязвимость держалась ровно до его
 	-- смерти, и оставшийся на колонне силуэт обещал бы бой, которого нет.
 	for index = 1, archerCount do
-		archerParts[index].Transparency = 1
+		archerModels[index].SetVisible(false)
 	end
 	archerCount = 0
 
@@ -225,15 +270,39 @@ end
 ]]
 local function drawTelegraph(entry: Telegraph, progress: number): ()
 	local base = origin + Vector3.new(entry.x, 0, entry.z)
+	local lift = Vector3.new(0, CONTOUR_HEIGHT * 0.5, 0)
 
 	if entry.shape == "Line" then
 		local direction = Vector3.new(entry.dirX, 0, entry.dirZ)
 		local full = entry.length
 		local grown = math.max(full * progress, 0.05)
+		local half = entry.width * 0.5
 
-		entry.outline.Size = Vector3.new(entry.width, 0.2, full)
-		local outlineCenter = base + direction * (full / 2) + Vector3.new(0, 0.15, 0)
-		entry.outline.CFrame = CFrame.lookAt(outlineCenter, outlineCenter + direction)
+		--[[
+			Полоса очерчивается четырьмя отрезками: два борта во всю длину
+			и два торца. Остальные отрезки контура прячутся — своего пула
+			на каждую форму заводить незачем, области не бывают одновременно.
+		]]
+		local across = Vector3.new(-direction.Z, 0, direction.X)
+		local centre = base + direction * (full * 0.5) + lift
+
+		for side = -1, 1, 2 do
+			local rail = entry.contour[if side < 0 then 1 else 2]
+			rail.Size = Vector3.new(CONTOUR_THICK, CONTOUR_HEIGHT, full)
+			local at = centre + across * (half * side)
+			rail.CFrame = CFrame.lookAt(at, at + direction)
+		end
+
+		for cap = 0, 1 do
+			local part = entry.contour[3 + cap]
+			part.Size = Vector3.new(entry.width, CONTOUR_HEIGHT, CONTOUR_THICK)
+			local at = base + direction * (full * cap) + lift
+			part.CFrame = CFrame.lookAt(at, at + direction)
+		end
+
+		for index = 5, CONTOUR_SEGMENTS do
+			entry.contour[index].Transparency = 1
+		end
 
 		entry.fill.Size = Vector3.new(entry.width, 0.2, grown)
 		local fillCenter = base + direction * (grown / 2) + Vector3.new(0, 0.2, 0)
@@ -241,15 +310,29 @@ local function drawTelegraph(entry: Telegraph, progress: number): ()
 		return
 	end
 
-	local diameter = entry.radius * 2
-	local flat = CFrame.Angles(0, 0, math.rad(90))
+	--[[
+		Круг: отрезки по касательной, ровно по границе радиуса. Хорда берётся
+		с нахлёстом, иначе кольцо читается пунктиром.
 
-	entry.outline.Size = Vector3.new(0.2, diameter, diameter)
-	entry.outline.CFrame = CFrame.new(base + Vector3.new(0, 0.15, 0)) * flat
+		Радиус здесь тот же, что у удара, и это не косметическая мелочь: круг,
+		нарисованный не там, где бьёт, — уже было багом.
+	]]
+	local step = math.pi * 2 / CONTOUR_SEGMENTS
+	local chord = 2 * entry.radius * math.sin(step * 0.5) * 1.06
 
-	local grown = math.max(diameter * progress, 0.05)
+	for index = 1, CONTOUR_SEGMENTS do
+		local angle = step * (index - 1)
+		local x, z = math.cos(angle), math.sin(angle)
+
+		local part = entry.contour[index]
+		part.Size = Vector3.new(chord, CONTOUR_HEIGHT, CONTOUR_THICK)
+		part.CFrame = CFrame.new(base.X + x * entry.radius, base.Y + CONTOUR_HEIGHT * 0.5, base.Z + z * entry.radius)
+			* CFrame.Angles(0, math.atan2(-x, -z), 0)
+	end
+
+	local grown = math.max(entry.radius * 2 * progress, 0.05)
 	entry.fill.Size = Vector3.new(0.2, grown, grown)
-	entry.fill.CFrame = CFrame.new(base + Vector3.new(0, 0.2, 0)) * flat
+	entry.fill.CFrame = CFrame.new(base + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
 end
 
 --[[
@@ -283,12 +366,14 @@ local function showTelegraph(
 	end
 
 	local color = if harmless then Palette.UI.warning else Palette.UI.danger
-	entry.outline.Color = color
 	entry.fill.Color = color
+	for _, part in entry.contour do
+		part.Color = color
+		part.Shape = Enum.PartType.Block
+	end
 
-	local isLine = shape == "Line"
-	entry.outline.Shape = if isLine then Enum.PartType.Block else Enum.PartType.Cylinder
-	entry.fill.Shape = entry.outline.Shape
+	-- Заливка круга — цилиндр, полосы — коробка; контур везде из коробок.
+	entry.fill.Shape = if shape == "Line" then Enum.PartType.Block else Enum.PartType.Cylinder
 
 	entry.shape = shape
 	entry.x = x
@@ -303,7 +388,9 @@ local function showTelegraph(
 	entry.active = true
 	entry.instant = instant
 
-	entry.outline.Transparency = OUTLINE_TRANSPARENCY
+	for _, part in entry.contour do
+		part.Transparency = CONTOUR_TRANSPARENCY
+	end
 	entry.fill.Transparency = FILL_TRANSPARENCY
 	drawTelegraph(entry, if instant then 1 else 0)
 end
@@ -391,9 +478,15 @@ local function onEvent(payload: { [string]: any }): ()
 		end
 
 		archerCount += 1
-		local part = archerParts[archerCount]
-		part.CFrame = CFrame.new(origin + Vector3.new(payload.x, payload.y + part.Size.Y * 0.5, payload.z))
-		part.Transparency = 0
+		local archer = archerModels[archerCount]
+
+		--[[
+			Показать, потом поставить: Draw у скрытой модели выходит сразу,
+			ничего не рисуя. Дальше её не трогают вовсе — стрелок не двигается,
+			а модель без анимации второй раз геометрию не считает.
+		]]
+		archer.SetVisible(true)
+		archer.Draw(CFrame.new(origin + Vector3.new(payload.x, payload.y, payload.z)), 0, 0)
 		return
 	end
 

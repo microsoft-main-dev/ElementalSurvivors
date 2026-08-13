@@ -19,7 +19,9 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Abilities = require(Shared.Config.Abilities)
 local BossRenderController = require(script.Parent.BossRenderController)
+local Cards = require(Shared.Config.Cards)
 local Icons = require(Shared.Config.Icons)
+local LevelUpController = require(script.Parent.LevelUpController)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
 local SettingsController = require(script.Parent.SettingsController)
@@ -55,6 +57,10 @@ type Icon = {
 	cooldownFill: Frame,
 	levelLabel: TextLabel,
 	nameLabel: TextLabel,
+	-- Кайма цветом лучшей взятой редкости. Толщина у обычной нулевая:
+	-- у семи карточек из десяти рамка была бы просто шумом.
+	rarityStroke: UIStroke,
+	rarityShown: string?,
 }
 local icons: { [string]: Icon } = {}
 
@@ -320,7 +326,19 @@ local function getIcon(key: string, order: number): Icon
 	levelText.TextStrokeTransparency = 0.2
 	levelText.Parent = holder
 
-	local icon: Icon = { holder = holder, cooldownFill = cooldown, levelLabel = levelText, nameLabel = name }
+	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = 0
+	stroke.Color = Palette.UI.accent
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = holder
+
+	local icon: Icon = {
+		holder = holder,
+		cooldownFill = cooldown,
+		levelLabel = levelText,
+		nameLabel = name,
+		rarityStroke = stroke,
+	}
 	icons[key] = icon
 	return icon
 end
@@ -486,6 +504,21 @@ local function onHeartbeat(deltaTime: number): ()
 
 		icon.cooldownFill.Size = UDim2.fromScale(1, ratio)
 		icon.levelLabel.Text = tostring(view.level)
+
+		--[[
+			Кайма редкости. Сравнение с показанным, а не безусловное присвоение:
+			снимок приходит десять раз в секунду, а редкость меняется несколько
+			раз за забег.
+		]]
+		local rarity = LevelUpController.BestRarity(view.key)
+		if icon.rarityShown ~= rarity then
+			icon.rarityShown = rarity
+			local common = rarity == nil or rarity == Cards.Common.key
+			icon.rarityStroke.Thickness = if common then 0 else 3
+			if not common then
+				icon.rarityStroke.Color = Cards.ColorFor(rarity :: string)
+			end
+		end
 	end
 
 	for key, icon in icons do

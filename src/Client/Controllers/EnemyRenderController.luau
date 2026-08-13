@@ -21,6 +21,8 @@
 	Публичный API:
 		EnemyRenderController.GetActiveCount() -> number   (для отладочного оверлея;
 			на Low качестве (M7) — только видимые в renderDistance, не все живые)
+		EnemyRenderController.Flash(centre, inner, outer, colour, start?, span?)
+			вспышка попадания по области; чистая косметика, урона не наносит
 ]]
 
 local Players = game:GetService("Players")
@@ -33,15 +35,30 @@ local ArenaLayout = require(Shared.Util.ArenaLayout)
 local Balance = require(Shared.Config.Balance)
 local Enemies = require(Shared.Config.Enemies)
 local EnemyMotion = require(Shared.Util.EnemyMotion)
+local Models = require(Shared.Config.Models)
 local Net = require(Shared.Net)
 local Packet = require(Shared.Util.Packet)
 local Palette = require(Shared.Config.Palette)
+local PartModel = require(Shared.Util.PartModel)
 local Pool = require(Shared.Util.Pool)
 local SettingsController = require(script.Parent.SettingsController)
 local SpatialHash = require(Shared.Util.SpatialHash)
 local Types = require(Shared.Types)
 
 local DEATH_FLASH_TIME = 0.09
+
+--[[
+	Вспышка попадания: сколько живёт и насколько отбрасывает.
+
+	Десятая секунды — это три тика симуляции: короче попадание не успевает
+	попасть в кадр, длиннее — толпа под аурой светится белым непрерывно.
+
+	Отскок мелкий намеренно. Это зрительный сдвиг, а не движение: враг
+	остаётся там, где его посчитал сервер, и уводить его дальше полустада
+	значит показывать игроку не ту позицию, по которой считается урон.
+]]
+local HIT_FLASH_TIME = 0.1
+local HIT_PUSH = 0.5
 local PREWARM = 340
 
 local EnemyRenderController = {}
@@ -76,6 +93,32 @@ local isAlive: { [number]: boolean } = {}
 	а дальше обе стороны считают одинаково тем же шагом 1/30 с.
 ]]
 local buffLeft: { [number]: number } = {}
+
+-- Сколько осталось светиться от попадания. Пусто у всех, кого не задели.
+local flashLeft: { [number]: number } = {}
+
+--[[
+	ВОКСЕЛЬНЫЕ МОДЕЛИ БЛИЖАЙШИМ ВРАГАМ.
+
+	Модель гоблина — десять деталей против трёх, и каждая едет в BulkMoveTo
+	каждый кадр. Пятьсот моделей удлинили бы самый длинный массив игры впятеро,
+	поэтому модель достаётся только тем, кто рядом, и только пока хватает
+	бюджета Balance.Quality.modelEnemies. Остальные ходят как раньше.
+
+	Тело врага при этом никуда не девается: оно становится невидимым, но
+	продолжает ездить в общем BulkMoveTo. На нём висит полоска здоровья, оно
+	же догорает вспышкой смерти, и своя ветка для «модельных» врагов в обоих
+	местах стоила бы дороже одной невидимой детали.
+
+	Усиленный полем босса модель не получает вовсе. Неуязвимость показывается
+	цветом ВСЕГО тела, а SetTints не трогает детали с ручным цветом — тряпьё
+	и клинок остались бы обычными, то есть сигнал «не бей» стал бы половинчатым.
+]]
+local modelEnemiesBudget = Balance.Quality.High.modelEnemies
+local modelPools: { [string]: Pool.Pool<PartModel.Built> } = {}
+local modelOf: { [number]: PartModel.Built } = {}
+local modelKeyOf: { [number]: string } = {}
+local modelTints: { [string]: PartModel.Tints } = {}
 -- Виден ли враг сейчас (в пределах renderDistance качества). false = скрыт
 -- прозрачностью и не участвует в BulkMoveTo, но продолжает симулироваться.
 local visible: { [number]: boolean } = {}
@@ -97,6 +140,10 @@ local partPool: Pool.Pool<Part>? = nil
 local extraPool: Pool.Pool<Part>? = nil
 local hash = SpatialHash.new(Balance.Combat.cellSize)
 local neighbours: { number } = {}
+
+-- Свой массив под выборку вспышки: neighbours занят расталкиванием,
+-- и общий на двоих затёрся бы посреди шага симуляции.
+local flashHits: { number } = {}
 
 -- Колонны арены: тот же набор, что у сервера, из того же seed.
 local obstacleHash = SpatialHash.new(Balance.Combat.cellSize * 2)
@@ -355,6 +402,16 @@ local function clearAll(): ()
 	end
 	table.clear(extraParts)
 	table.clear(buffLeft)
+	table.clear(flashLeft)
+
+	--[[
+		Модели уходят вместе с пулами, а не возвращаются в них: их детали
+		лежат в контейнере забега, и он будет уничтожен. Пул, переживший
+		контейнер, раздал бы следующему забегу уничтоженные модели.
+	]]
+	table.clear(modelOf)
+	table.clear(modelKeyOf)
+	table.clear(modelPools)
 
 	table.clear(positions)
 	table.clear(offsets)
@@ -458,12 +515,108 @@ end
 	Цвет меняется сразу: игрок обязан видеть, по кому бить бесполезно,
 	до того, как он потратит на это способность.
 ]]
+--[[
+	Вернуть врагу его собственные цвета.
+
+	Одна функция на два случая — конец усиления и конец вспышки попадания:
+	перекрашивают они одинаково, а разъехавшись, оставили бы врага белым
+	навсегда в том из них, который забыли поправить.
+]]
+--[[
+	Палитра модели врага: свой цвет из Palette.Model.bases, если он есть,
+	иначе стихия. То же правило, что у боссов, и по той же причине —
+	гоблин стихии Dark, но фиолетовый гоблин не гоблин.
+]]
+local function tintsForModel(key: string, def: Types.EnemyDef): PartModel.Tints
+	local existing = modelTints[key]
+	if existing then
+		return existing
+	end
+
+	local base = Palette.Model.bases[key] or Palette.Element[def.element]
+	local made = PartModel.TintsFor(base, Palette.Model.accent)
+	modelTints[key] = made
+	return made
+end
+
+local function getModelPool(key: string, def: Types.EnemyDef): Pool.Pool<PartModel.Built>
+	local existing = modelPools[key]
+	if existing then
+		return existing
+	end
+
+	local modelDef = Models.ByKey[key]
+	local tints = tintsForModel(key, def)
+	--[[
+		Пул набирается сразу на весь бюджет: собрать два десятка моделей
+		посреди волны — это тот самый Instance.new в бою, которого во всём
+		рендере врагов нет. Начало забега для этого и есть место.
+	]]
+	local created = Pool.new(function(): PartModel.Built
+		return PartModel.Build(modelDef, tints, container :: Instance)
+	end, function(model: PartModel.Built)
+		model.SetVisible(false)
+	end, modelEnemiesBudget)
+	modelPools[key] = created
+	return created
+end
+
+local function releaseModel(id: number): ()
+	local model = modelOf[id]
+	if not model then
+		return
+	end
+
+	local pool = modelPools[modelKeyOf[id]]
+	if pool then
+		pool.Release(model)
+	end
+	modelOf[id] = nil
+	modelKeyOf[id] = nil
+end
+
+local function restoreColors(id: number, def: Types.EnemyDef): ()
+	--[[
+		У модельного врага цвет живёт в модели. Ручной цвет деталей (тряпьё,
+		сталь, глаза) SetTints не трогает — вспыхивает и гаснет кожа, и этого
+		достаточно: сигнал «попал» нужен на теле, а не на снаряжении.
+	]]
+	local model = modelOf[id]
+	if model then
+		model.SetTints(tintsForModel(modelKeyOf[id], def))
+	end
+
+	local part = parts[id]
+	if part then
+		part.Color = colorFor(def)
+	end
+
+	local colors = extraColors[typeIds[id]]
+	if not colors then
+		return
+	end
+
+	local base = (id - 1) * MAX_PARTS
+	for slot = 1, #colors do
+		local extra = extraParts[base + slot]
+		if extra then
+			extra.Color = colors[slot]
+		end
+	end
+end
+
 local function applyBuff(id: number, seconds: number): ()
 	if not isAlive[id] then
 		return
 	end
 
 	buffLeft[id] = seconds
+	-- Вспышка попадания снимается: её счётчик кончится раньше поля и вернул бы
+	-- врагу обычный цвет, то есть показал бы уязвимым того, кто неуязвим.
+	flashLeft[id] = nil
+	-- Модель тоже: белеть обязано ВСЁ тело, а ручной цвет тряпья и клинка
+	-- палитре носителя не подчиняется.
+	releaseModel(id)
 
 	local part = parts[id]
 	if part then
@@ -492,7 +645,9 @@ local function applyDespawn(id: number, reason: number): ()
 		точек, висящих в воздухе поверх неё, читается как брошенные части.
 	]]
 	releaseExtras(id)
+	releaseModel(id)
 	buffLeft[id] = nil
+	flashLeft[id] = nil
 
 	local part = parts[id]
 	parts[id] = nil
@@ -506,6 +661,9 @@ local function applyDespawn(id: number, reason: number): ()
 		-- жизни на экране.
 		part.Material = Enum.Material.Neon
 		part.Color = Palette.Brand.white
+		-- Модельный враг ходил с невидимым телом: вспышке нужно вернуть его,
+		-- иначе смерть ближайших врагов проходила бы вообще без следа.
+		part.Transparency = 0
 		fadingCount += 1
 		fadingParts[fadingCount] = part
 		fadingUntil[fadingCount] = os.clock() + DEATH_FLASH_TIME
@@ -571,21 +729,20 @@ local function simulate(dt: number, playerLocal: Vector3): ()
 					speed = buffSpeed
 				else
 					buffLeft[id] = nil
-					local part = parts[id]
-					if part then
-						part.Color = colorFor(def)
-					end
+					restoreColors(id, def)
+				end
+			end
 
-					local colors = extraColors[typeIds[id]]
-					if colors then
-						local base = (id - 1) * MAX_PARTS
-						for slot = 1, #colors do
-							local extra = extraParts[base + slot]
-							if extra then
-								extra.Color = colors[slot]
-							end
-						end
-					end
+			-- Вспышка попадания гаснет так же, как усиление: своим счётчиком
+			-- и тем же возвратом цвета.
+			local flash = flashLeft[id]
+			if flash then
+				flash -= dt
+				if flash > 0 then
+					flashLeft[id] = flash
+				else
+					flashLeft[id] = nil
+					restoreColors(id, def)
 				end
 			end
 
@@ -627,7 +784,7 @@ local function simulate(dt: number, playerLocal: Vector3): ()
 	end
 end
 
-local function render(now: number, playerLocal: Vector3): ()
+local function render(now: number, deltaTime: number, playerLocal: Vector3): ()
 	local bobSpeed = Balance.Combat.bobSpeed
 	local bobAmplitude = Balance.Combat.bobAmplitude
 	local renderDistanceSquared = renderDistance * renderDistance
@@ -637,6 +794,7 @@ local function render(now: number, playerLocal: Vector3): ()
 	local count = 0
 	local bodies = 0
 	local bars = 0
+	local modelled = 0
 
 	for id = 1, highWater do
 		if isAlive[id] then
@@ -658,6 +816,9 @@ local function render(now: number, playerLocal: Vector3): ()
 
 				if not inRange then
 					if visible[id] ~= false then
+						-- Модель уходит вместе с видимостью: иначе она осталась бы
+						-- стоять там, где враг скрылся, до самой его смерти.
+						releaseModel(id)
 						part.Transparency = 1
 						for slot = 1, MAX_PARTS do
 							local extra = extraParts[extraBase + slot]
@@ -690,6 +851,30 @@ local function render(now: number, playerLocal: Vector3): ()
 				visible[id] = true
 
 				local offset = offsets[id]
+
+				--[[
+					Модель ближайшим. Взятая один раз, она остаётся у врага,
+					пока он жив и виден: перебирать «а кто теперь ближе»
+					каждый кадр значило бы мигать моделями в толпе.
+
+					Бюджет считается заново каждый кадр, поэтому освободившееся
+					место достаётся следующему врагу без всякой бухгалтерии.
+				]]
+				local model = modelOf[id]
+				if not model and def.modelKey and modelled < modelEnemiesBudget and not buffLeft[id] then
+					model = getModelPool(def.modelKey, def).Get()
+					model.SetVisible(true)
+					modelOf[id] = model
+					modelKeyOf[id] = def.modelKey
+					part.Transparency = 1
+					for slot = 1, MAX_PARTS do
+						local extra = extraParts[extraBase + slot]
+						if extra then
+							extra.Transparency = 1
+						end
+					end
+				end
+
 				local bob = EnemyMotion.BobOffset(phases[id], now, bobSpeed, bobAmplitude)
 
 				--[[
@@ -719,6 +904,50 @@ local function render(now: number, playerLocal: Vector3): ()
 				count += 1
 				bodies += 1
 				moveParts[count] = part
+
+				if model then
+					modelled += 1
+
+					-- Тело едет невидимым: на нём висит полоска здоровья
+					-- и им же догорает вспышка смерти.
+					moveCFrames[count] = CFrame.new(center)
+
+					local distance = math.sqrt(dx * dx + dz * dz)
+					local forwardX, forwardZ = 0, -1
+					if distance > 1e-3 then
+						forwardX = -dx / distance
+						forwardZ = -dz / distance
+					end
+
+					--[[
+						Пивот модели стоит на полу: offset деталей отсчитан
+						от него же. Покачивание телу не передаётся — у модели
+						есть ноги, и качать её вверх-вниз поверх шага значит
+						отрывать её от земли.
+
+						Скорость идёт в Draw как есть: канал step считает шаг
+						от пройденного пути, и на ней он и держится.
+					]]
+					model.Draw(
+						CFrame.new(
+							center.X,
+							origin.Y,
+							center.Z,
+							-forwardZ,
+							0,
+							-forwardX,
+							0,
+							1,
+							0,
+							forwardX,
+							0,
+							-forwardZ
+						),
+						deltaTime,
+						def.stats.speed
+					)
+					continue
+				end
 
 				local locals = extraLocal[typeIds[id]]
 				if not locals then
@@ -819,7 +1048,7 @@ local function onHeartbeat(deltaTime: number): ()
 	end
 
 	if steps > 0 then
-		render(now, playerLocal)
+		render(now, deltaTime, playerLocal)
 	end
 end
 
@@ -850,6 +1079,7 @@ local function onRunStarted(slot: number, seed: number): ()
 	renderDistance = quality.renderDistance
 	deathFlash = quality.deathFlash
 	healthBarLimit = quality.healthBars
+	modelEnemiesBudget = quality.modelEnemies
 
 	local folder = Instance.new("Folder")
 	folder.Name = "Enemies"
@@ -858,6 +1088,19 @@ local function onRunStarted(slot: number, seed: number): ()
 
 	getPool()
 	getExtraPool()
+
+	--[[
+		Пулы моделей набираются здесь, а не при первой встрече с гоблином:
+		собрать два десятка моделей посреди волны — это Instance.new в бою,
+		которого во всём рендере врагов нет. Врагов с моделями двое, и обоих
+		видно из конфига, а не из того, что успело заспавниться.
+	]]
+	for _, def in Enemies.List do
+		if def.modelKey then
+			getModelPool(def.modelKey, def)
+		end
+	end
+
 	paused = false
 	active = true
 end
@@ -926,6 +1169,98 @@ local function onResync(data: buffer): ()
 			-- Здоровье едет тем же пакетом: полоска обновляется тогда же,
 			-- когда врага и так поправили по позиции.
 			health[id] = resyncHealth[index]
+		end
+	end
+end
+
+--[[
+	Вспышка попадания по всем врагам в области.
+
+	КОСМЕТИКА И ТОЛЬКО. Урон считает сервер по своей геометрии; здесь клиент
+	лишь показывает, что удар пришёлся, — и потому промах на полстада ничего
+	не стоит, а расхождение с сервером невозможно в принципе: отсюда никакой
+	урон не следует.
+
+	Координаты локальные, как у всей симуляции врагов.
+
+	Кольцо, а не круг: расходящаяся волна задевает врагов по мере ухода,
+	и внутренний радиус отсекает тех, кого она прошла в прошлом кадре.
+	start и span задают сектор — ими пользуется клин; nil означает полный круг.
+]]
+function EnemyRenderController.Flash(
+	centre: Vector3,
+	inner: number,
+	outer: number,
+	colour: Color3,
+	start: number?,
+	span: number?
+): ()
+	if not active then
+		return
+	end
+
+	local found = hash.Collect(centre, outer, flashHits)
+	local half = if span then span * 0.5 else 0
+	-- Середина сектора считается заранее и отдельной переменной: приведение
+	-- типа посреди арифметики читается двусмысленно и делает то, чего не ждёшь.
+	local middle = (start or 0) + half
+
+	for index = 1, found do
+		local id = flashHits[index]
+
+		-- Усиленный полем босса неуязвим, и вспышка на нём соврала бы: игрок
+		-- обязан видеть, что бить по нему бесполезно.
+		if not isAlive[id] or buffLeft[id] then
+			continue
+		end
+
+		local position = positions[id]
+		local dx = position.X - centre.X
+		local dz = position.Z - centre.Z
+		local distance = math.sqrt(dx * dx + dz * dz)
+
+		-- Радиус самого врага в счёт: волна, прошедшая по краю большого
+		-- слизня, задела его — как и на сервере, где это делает CollectHits.
+		local radius = Enemies.List[typeIds[id]].stats.radius
+		if distance > outer + radius or distance < inner - radius then
+			continue
+		end
+
+		if span then
+			local delta = (math.atan2(dz, dx) - middle + math.pi) % (math.pi * 2) - math.pi
+			if math.abs(delta) > half then
+				continue
+			end
+		end
+
+		flashLeft[id] = HIT_FLASH_TIME
+
+		local model = modelOf[id]
+		if model then
+			model.SetTints(PartModel.TintsFor(colour, colour))
+		end
+
+		local part = parts[id]
+		if part then
+			part.Color = colour
+		end
+
+		local base = (id - 1) * MAX_PARTS
+		for slot = 1, MAX_PARTS do
+			local extra = extraParts[base + slot]
+			if extra then
+				extra.Color = colour
+			end
+		end
+
+		--[[
+			Отскок делается уже существующей невязкой, которая и так затухает
+			к нулю каждый тик. Своего состояния он не заводит, а главное —
+			не трогает positions: позиция врага принадлежит серверу, и сдвинуть
+			её значило бы показывать не то, по чему считается урон.
+		]]
+		if distance > 1e-3 then
+			offsets[id] += Vector3.new(dx / distance, 0, dz / distance) * HIT_PUSH
 		end
 	end
 end

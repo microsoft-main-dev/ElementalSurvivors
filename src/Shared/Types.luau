@@ -144,6 +144,42 @@ export type ModelTint = "primary" | "secondary" | "dark" | "accent"
 ]]
 export type ModelAnim = "spin" | "bob" | "pulse" | "step" | "glow" | "flicker"
 
+--[[
+	Лента, тянущаяся за деталью (Trail).
+
+	Ассетом не является: Trail — объект движка, ему не нужна ни картинка,
+	ни загрузка. Без текстуры он рисуется сплошной заливкой с переходом
+	цвета вдоль длины — именно это и нужно, чтобы хвост огонька уходил
+	из жёлтого в красный, а не был палкой одного цвета.
+
+	length — расстояние между точками привязки, то есть ширина ленты.
+	tint/tailTint — цвет у детали и цвет на излёте, роли из палитры носителя.
+]]
+export type ModelTrailDef = {
+	length: number,
+	lifetime: number,
+	tint: ModelTint?,
+	tailTint: ModelTint?,
+	transparency: number?,
+}
+
+--[[
+	Искры от детали (ParticleEmitter).
+
+	Текстура не задаётся намеренно: встроенная в движок годится, а любая
+	другая — это уже загруженный ассет (правило 4). Считать частицы дорого,
+	поэтому rate задаётся поштучно, а не появляется у всего неонового разом.
+]]
+export type ModelParticlesDef = {
+	rate: number,
+	size: number,
+	speed: number,
+	lifetime: number,
+	spread: number?, -- градусы разлёта, по умолчанию узкий столбик
+	rise: number?, -- ускорение вверх, студов в секунду за секунду
+	tint: ModelTint?,
+}
+
 export type ModelPartDef = {
 	shape: "Block" | "Ball" | "Cylinder",
 	-- Встроенный SpecialMesh поверх формы. Бесплатен по кадру: создаётся
@@ -180,6 +216,8 @@ export type ModelPartDef = {
 		задаётся поштучно, а не появляется у всего неонового разом.
 	]]
 	light: number?,
+	trail: ModelTrailDef?,
+	particles: ModelParticlesDef?,
 	anim: ModelAnim?,
 	-- Оборотов или качаний в секунду; для step — циклов на стад пути.
 	animSpeed: number?,
@@ -259,6 +297,15 @@ export type EnemyDef = {
 	modifiers: { EnemyModifier },
 	stats: EnemyStats,
 	model: EnemyModel,
+	--[[
+		Воксельная модель из Config/Models вместо тела с мелочью.
+
+		Необязательна и по построению редка: модель достаётся врагу, только
+		пока он близко и пока не выбран бюджет Balance.Quality.modelEnemies.
+		Толпа в пятьсот тел ходит одной деталью на каждого, и это не меняется —
+		модель получает тот, кого игрок разглядывает.
+	]]
+	modelKey: string?,
 	splitInto: EnemySplit?,
 	ranged: EnemyRanged?,
 }
@@ -346,6 +393,32 @@ export type AbilityGrowth = {
 ]]
 export type AbilitySource = "Base" | "Signature"
 
+--[[
+	Как способность выглядит в бою.
+
+	Форма (shape) отвечает за то, ЧТО происходит: орб летает по кругу, снаряд
+	летит по прямой. Она же одна на несколько способностей. Здесь — чем именно
+	это нарисовано у конкретной способности: огненный орб и сгусток тьмы ходят
+	по одной окружности, но выглядеть одинаково не должны.
+
+	body — ключ модели из Config/Models (все они с приставкой Fx). nil означает
+	«рисовать прежней неоновой деталью»: без него способность без описанного
+	тела осталась бы невидимой, а тела появляются по одному.
+
+	burst — сколько искр выбрасывать на срабатывание. Нужен мгновенным формам:
+	вспышка, клин и цепь живут доли секунды, и без искр от них не остаётся
+	следа вовсе. У постоянных форм (орбита, аура) искры идут потоком из самого
+	тела, и здесь их нет.
+
+	beam — ширина дуги у формы Chain. Единственное, чем различаются две цепные
+	способности: обе молнии, то есть цвет у них один и тот же.
+]]
+export type AbilityFxDef = {
+	body: string?,
+	burst: number?,
+	beam: number?,
+}
+
 export type AbilityDef = {
 	key: string,
 	typeId: number, -- индекс в Abilities.List, летит по сети
@@ -357,6 +430,7 @@ export type AbilityDef = {
 	base: AbilityLevel,
 	growth: AbilityGrowth,
 	milestone: AbilityMilestone,
+	fx: AbilityFxDef?,
 }
 
 --[[

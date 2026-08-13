@@ -66,13 +66,57 @@ local function makePart(): Part
 	return part
 end
 
+--[[
+	Хвост стрелы: та же лента, что у снарядов способностей.
+
+	Стрела летит из толпы в триста тел, и одна тёмная палка в ней теряется
+	даже после трассера. Лента тянется за ней и говорит, откуда она пришла.
+
+	Хранится рядом с деталью, а не ищется по имени: пул раздаёт одни и те же
+	детали весь забег, и искать потомка на каждом выстреле незачем.
+]]
+local trailOf: { [Part]: Trail } = {}
+
+local function makeShotPart(): Part
+	local part = makePart()
+
+	local top = Instance.new("Attachment")
+	top.Position = Vector3.new(0, 0.25, 0)
+	top.Parent = part
+
+	local bottom = Instance.new("Attachment")
+	bottom.Position = Vector3.new(0, -0.25, 0)
+	bottom.Parent = part
+
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = top
+	trail.Attachment1 = bottom
+	trail.Lifetime = 0.18
+	trail.FaceCamera = true
+	trail.LightEmission = 0.4
+	trail.Color = ColorSequence.new(Palette.Element.Dark, Palette.ElementAccent.Dark)
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.Enabled = false
+	trail.Parent = part
+
+	trailOf[part] = trail
+	return part
+end
+
 local function getShotPool(): Pool.Pool<Part>
 	local pool = shotPool
 	if pool then
 		return pool
 	end
-	local created = Pool.new(makePart, function(part: Part)
+	local created = Pool.new(makeShotPart, function(part: Part)
 		part.Parent = nil
+		local trail = trailOf[part]
+		if trail then
+			trail.Enabled = false
+		end
 	end, 16)
 	shotPool = created
 	return created
@@ -163,6 +207,17 @@ local function onHeartbeat(deltaTime: number): ()
 				-- Трассер догорел: линия гаснет, летит снаряд.
 				releaseTracer(shot)
 				shot.part.Transparency = 0
+
+				--[[
+					Лента чистится ПЕРЕД включением: деталь только что взяли
+					из пула, и она помнит путь прошлой стрелы — иначе новая
+					прочертит полосу от места, где упала предыдущая.
+				]]
+				local trail = trailOf[shot.part]
+				if trail then
+					trail:Clear()
+					trail.Enabled = true
+				end
 			end
 			index += 1
 			continue

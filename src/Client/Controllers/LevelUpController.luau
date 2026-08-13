@@ -12,6 +12,15 @@
 	первую и снимет паузу: зависшая арена недопустима.
 
 	Карточки крупные и разнесены: попадание пальцем важнее плотности.
+
+	ЗДЕСЬ ЖЕ ЖИВЁТ РЕДКОСТЬ ВЗЯТОГО. Способность копит множители за забег,
+	и по её уровню редкость карточек уже не восстановить — а показать её
+	хочется и в бою (цвет ядра эффекта), и в HUD (кайма иконки). Клиент
+	сам выбирает карточку, то есть знает это без единого лишнего пакета,
+	и хранить знание правильнее там, где оно появляется.
+
+	Публичный API:
+		LevelUpController.BestRarity(abilityKey) -> string?
 ]]
 
 local Players = game:GetService("Players")
@@ -29,9 +38,31 @@ local UiKit = require(script.Parent.Parent.UI.UiKit)
 
 type LevelUpCard = Types.LevelUpCard
 
+--[[
+	Отступ содержимого от края карточки: ровно под расширенный борт рамки,
+	чтобы шапка не легла на него сверху.
+]]
+local CARD_INSET = 18
+
 local LevelUpController = {}
 
 local player = Players.LocalPlayer
+
+--[[
+	Ранг редкости по ключу: Cards.Rarities идут от частой к редкой, поэтому
+	номер в списке и есть «насколько редка». Сравнивать ключи строками было бы
+	сравнением ни с чем.
+]]
+local rarityRank: { [string]: number } = {}
+for index, rarity in Cards.Rarities do
+	rarityRank[rarity.key] = index
+end
+
+-- Лучшая редкость, взятая за этот забег по каждой способности.
+local bestRarity: { [string]: string } = {}
+
+-- Что сейчас предложено: нужно, чтобы по номеру выбора узнать редкость.
+local offered: { LevelUpCard } = {}
 
 local screen: ScreenGui? = nil
 local cardRow: Frame? = nil
@@ -114,11 +145,28 @@ local function hide(): ()
 	end
 end
 
+--[[
+	Запомнить редкость взятого. Только вверх: способность копит множители,
+	и одна обычная карточка поверх легендарной не отменяет легендарную.
+]]
+local function record(card: LevelUpCard?): ()
+	if not card then
+		return
+	end
+
+	local best = bestRarity[card.abilityKey]
+	local rank = rarityRank[card.rarity] or 1
+	if not best or rank > (rarityRank[best] or 1) then
+		bestRarity[card.abilityKey] = card.rarity
+	end
+end
+
 local function choose(index: number): ()
 	if not awaitingChoice then
 		return
 	end
 	awaitingChoice = false
+	record(offered[index])
 	SoundController.PlaySfx("CardChosen")
 
 	local remote = choiceRemote
@@ -136,7 +184,9 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	end
 
 	local def = Abilities.ByKey[card.abilityKey]
-	local color = if def then Palette.Element[def.element] else Palette.UI.accent
+	local rarity = Cards.ByKey[card.rarity]
+	local rarityColour = Cards.ColorFor(card.rarity)
+	local rank = rarityRank[card.rarity] or 1
 
 	local button = Instance.new("TextButton")
 	button.Name = `Card{index}`
@@ -152,29 +202,81 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	corner.CornerRadius = UDim.new(0, 12)
 	corner.Parent = button
 
-	-- Карточка получает ту же рамку, что и окна: это самый заметный экран
-	-- в бою, и плоский прямоугольник рядом с обрамлёнными панелями выпадал.
-	UiKit.Skin(button, "FrameWindow")
+	--[[
+		РЕДКОСТЬ КРАСИТ ВСЮ КАРТОЧКУ, А НЕ ПОДПИСЬ.
+
+		Раньше шапка была цвета стихии, а редкость — только словом и толщиной
+		контура. Разница между Common и Rare при этом не читалась вовсе: рядом
+		стояли зелёная, голубая и сиреневая карточки, и цвет означал стихию,
+		которую и так видно по значку и названию.
+
+		Красится сам СКИН, а не подложка под ним: рамка карточки — та же
+		рисованная рамка, что у окон, и ImageColor3 подмешивает к ней оттенок
+		редкости, не ломая ни рисунка, ни фаски. Обычной достаётся чистый белый,
+		то есть рамка без изменений; чем реже карточка, тем сильнее оттенок.
+	]]
+	local frame = UiKit.Skin(button, "FrameWindow")
+	if frame then
+		frame.ImageColor3 = if rank <= 1 then Color3.new(1, 1, 1) else rarityColour:Lerp(Color3.new(1, 1, 1), 0.55)
+		--[[
+			Рамка шире, чем у окон. SliceScale растягивает УГЛЫ, а не середину:
+			у окна борт в двадцать два пикселя уместен, а карточка — самый
+			крупный элемент боя, её смотрят издалека и мельком, и борт такой
+			же толщины на ней теряется.
+
+			Свой множитель, а не правка UiKit.SKIN: там числа измерены по самим
+			файлам и общие на все окна игры.
+		]]
+		frame.SliceScale = 1.6
+	end
 
 	--[[
-		Контур карточки — цвет РЕДКОСТИ, а не стихии: редкость решает, сколько
-		даст карточка, и заметить её надо раньше, чем прочитать текст. Стихия
-		при этом остаётся в шапке и в названии.
+		Контур поверх рисованной рамки выглядит наклейкой на дереве, поэтому
+		он остаётся только там, где скина нет вовсе (ассет не загрузился или
+		снят модерацией) — иначе редкость перестала бы читаться совсем.
 	]]
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = Cards.ColorFor(card.rarity)
-	stroke.Thickness = if card.rarity == Cards.Common.key then 3 else 5
-	stroke.Parent = button
+	if not frame then
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = rarityColour
+		stroke.Thickness = 2 + (rank - 1) * 2
+		stroke.Parent = button
+	end
+
+	--[[
+		Всё содержимое живёт внутри отступа от края.
+
+		Подложка скина — потомок кнопки, и UIPadding на самой кнопке сдвинул бы
+		и её тоже, то есть ужал бы рамку вместо того, чтобы отодвинуть от неё
+		текст (эти грабли в проекте уже описаны). Поэтому отступ держит
+		отдельная прозрачная рама, а рамка остаётся во всю карточку.
+	]]
+	local content = Instance.new("Frame")
+	content.Name = "Content"
+	content.BackgroundTransparency = 1
+	content.Position = UDim2.fromOffset(CARD_INSET, CARD_INSET)
+	content.Size = UDim2.new(1, -CARD_INSET * 2, 1, -CARD_INSET * 2)
+	content.Parent = button
 
 	local header = Instance.new("Frame")
 	header.Size = UDim2.fromScale(1, 0.22)
-	header.BackgroundColor3 = color
+	header.BackgroundColor3 = rarityColour
+	header.BackgroundTransparency = 0.15
 	header.BorderSizePixel = 0
-	header.Parent = button
+	header.Parent = content
 
-	local headerCorner = Instance.new("UICorner")
-	headerCorner.CornerRadius = UDim.new(0, 12)
-	headerCorner.Parent = header
+	--[[
+		Шапка — та же полоса, которой нарисованы здоровье и опыт. Она почти
+		белая и красится кодом, поэтому цвет редкости ложится на неё как есть,
+		а рисунок остаётся рисованным.
+	]]
+	local headerSkin = UiKit.Skin(header, "BarFill")
+	if headerSkin then
+		headerSkin.ImageColor3 = rarityColour
+	else
+		local headerCorner = Instance.new("UICorner")
+		headerCorner.CornerRadius = UDim.new(0, 12)
+		headerCorner.Parent = header
+	end
 
 	--[[
 		Иконка способности крупно, между шапкой и названием.
@@ -188,7 +290,7 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 		Квадрат держит контейнер: значок вписывается в него по меньшей стороне,
 		поэтому пропорции не зависят ни от экрана, ни от числа карточек в ряду.
 	]]
-	local iconHolder = UiKit.Frame(button, "IconHolder")
+	local iconHolder = UiKit.Frame(content, "IconHolder")
 	iconHolder.Position = UDim2.fromScale(0, 0.24)
 	iconHolder.Size = UDim2.fromScale(1, 0.3)
 
@@ -209,12 +311,26 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 		сравнить: «Common» на соседней карточке объясняет, чем хороша «Rare»,
 		лучше любого объяснения.
 	]]
-	local rarity = Cards.ByKey[card.rarity]
 	local rarityText = if rarity then `  ·  {rarity.displayName}` else ""
 	badge.Text = if card.isNew then "NEW" else `LEVEL {card.level}{rarityText}`
-	badge.TextColor3 = Palette.UI.background
+	--[[
+		Тёмная подпись на светлой шапке и светлая на тёмной. Цвет шапки теперь
+		берётся из редкости, а среди четырёх есть и почти белая, и сиреневая:
+		одна подпись на всех была бы нечитаемой на одной из них.
+	]]
+	local _, _, brightness = rarityColour:ToHSV()
+	badge.TextColor3 = if brightness > 0.6 then Palette.UI.background else Palette.UI.text
 	badge.TextScaled = true
 	badge.Parent = header
+
+	--[[
+		Потолок кегля. TextScaled тянет надпись во всю высоту шапки, а шапка
+		— это пятая часть карточки: на широком экране подпись вырастала вдвое
+		крупнее названия способности, ради которого карточку и читают.
+	]]
+	local badgeSize = Instance.new("UITextSizeConstraint")
+	badgeSize.MaxTextSize = 22
+	badgeSize.Parent = badge
 
 	local badgePadding = Instance.new("UIPadding")
 	badgePadding.PaddingTop = UDim.new(0, 6)
@@ -230,7 +346,7 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	name.Text = if def then def.displayName else card.abilityKey
 	name.TextColor3 = Palette.UI.text
 	name.TextScaled = true
-	name.Parent = button
+	name.Parent = content
 
 	local description = Instance.new("TextLabel")
 	description.AnchorPoint = Vector2.new(0.5, 0)
@@ -250,7 +366,7 @@ local function buildCard(card: LevelUpCard, index: number, total: number): ()
 	description.TextColor3 = Palette.UI.subtext
 	description.TextWrapped = true
 	description.TextScaled = true
-	description.Parent = button
+	description.Parent = content
 
 	button.Activated:Connect(function()
 		choose(index)
@@ -271,6 +387,8 @@ local function show(level: number, cards: { LevelUpCard }): ()
 		title.Text = `LEVEL {level}`
 	end
 
+	offered = cards
+
 	for index, card in cards do
 		buildCard(card, index, #cards)
 	end
@@ -290,11 +408,28 @@ function LevelUpController.Start(): ()
 	-- Сервер снял паузу сам (таймаут или выбор применён) — экран убираем.
 	Net.GetEvent(Net.Id.CombatPaused).OnClientEvent:Connect(function(paused: boolean)
 		if not paused then
+			--[[
+				Пауза снята, а выбор так и не сделан: значит сработал таймаут,
+				и сервер взял первую карточку (см. шапку). Записываем её же,
+				иначе взятая редкость разошлась бы с настоящей.
+			]]
+			if awaitingChoice then
+				record(offered[1])
+			end
 			hide()
 		end
 	end)
 
-	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(hide)
+	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(function()
+		hide()
+		-- Множители способностей забег не переживают, и редкость тоже.
+		table.clear(bestRarity)
+		table.clear(offered)
+	end)
+end
+
+function LevelUpController.BestRarity(abilityKey: string): string?
+	return bestRarity[abilityKey]
 end
 
 return LevelUpController
