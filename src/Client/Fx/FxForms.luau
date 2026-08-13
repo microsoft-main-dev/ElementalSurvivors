@@ -28,7 +28,7 @@
 	у FxKit и возвращается туда же. Причина расписана в его шапке.
 
 	Публичный API:
-		FxForms.Begin(origin)                 -- начало забега
+		FxForms.Begin(origin, quality)         -- начало забега
 		FxForms.SetViews(views)               -- снимок состояния способностей
 		FxForms.Spawn(kind, key, payload)     -- событие с сервера
 		FxForms.Step(deltaTime, now, playerWorld)
@@ -73,7 +73,6 @@ local WAVE_START = 1.5
 -- Кольцу нужно пройти двадцать стадов так, чтобы глаз проследил путь;
 -- клину — до тридцати четырёх, и он поэтому чуть быстрее.
 local NOVA_TIME = 0.45
-local NOVA_SEGMENTS = 24
 local NOVA_WALL = 3.5
 local NOVA_THICK = 0.5
 
@@ -127,13 +126,13 @@ local AURA_DECOR = 4
 local AURA_SPEED = 0.55
 
 --[[
-	Из скольких зубцов набран контур ауры.
-
-	Двадцать четыре: на радиусе 10 это отрезки примерно по два стада, и кольцо
-	читается кругом, а не многоугольником. Зубцы через один разной высоты —
-	ровная лента выглядит забором, а рваная языками пламени.
+	Из скольких зубцов набран контур ауры — то же число, что у кольца Nova
+	(quality.waveSegments, Balance.Quality): и то и другое кольцо, различать
+	их сегментами незачем. На High это двадцать четыре: на радиусе 10 это
+	отрезки примерно по два стада, и кольцо читается кругом, а не
+	многоугольником. Зубцы через один разной высоты — ровная лента выглядит
+	забором, а рваная языками пламени.
 ]]
-local AURA_RING = 24
 
 -- Высота, на которой идёт дуга цепи и висят её узлы.
 local CHAIN_HEIGHT = 2.2
@@ -146,6 +145,10 @@ local FxForms = {}
 
 local origin = Vector3.zero
 local views: { AbilityView } = {}
+
+-- Значение по умолчанию совпадает с High, тем же способом и по той же
+-- причине, что в FxKit: ничего не должно рисоваться до первого Begin.
+local quality: FxKit.Quality = { trails = true, sparks = true, waveSegments = 24 }
 
 -- Собственная фаза кольца ауры: сервер её не считает и слать не может —
 -- украшения не бьют, они только показывают границу.
@@ -390,8 +393,15 @@ local function addBurst(def: AbilityDef, position: Vector3): ()
 		return
 	end
 
+	-- На Low FxKit.Burst не создаёт залп и возвращает nil — тогда и запоминать
+	-- в bursts нечего, эффект просто не рисуется.
+	local rig = FxKit.Burst(position, Palette.ElementAccent[def.element], count)
+	if not rig then
+		return
+	end
+
 	table.insert(bursts, {
-		rig = FxKit.Burst(position, Palette.ElementAccent[def.element], count),
+		rig = rig,
 		startedAt = os.clock(),
 	})
 end
@@ -452,12 +462,12 @@ local function stepAuraRing(key: string, element: Types.Element, radius: number,
 		auraRingByKey[key] = ring
 	end
 
-	local step = math.pi * 2 / AURA_RING
+	local step = math.pi * 2 / quality.waveSegments
 	-- Длина зубца — хорда с нахлёстом: без него между зубцами видны просветы,
 	-- и кольцо читается пунктиром, а не кольцом.
 	local chord = 2 * radius * math.sin(step * 0.5) * 1.08
 
-	for index = 1, AURA_RING do
+	for index = 1, quality.waveSegments do
 		local tall = index % 2 == 0
 
 		local part = ring[index]
@@ -880,7 +890,7 @@ local function spawnNova(def: AbilityDef, payload: FxPayload): ()
 		centre = centre,
 		start = 0,
 		span = math.pi * 2,
-		segments = NOVA_SEGMENTS,
+		segments = quality.waveSegments,
 		radius = data.radius :: number,
 		wall = NOVA_WALL,
 		thickness = NOVA_THICK,
@@ -999,8 +1009,9 @@ local function spawnChain(def: AbilityDef, payload: FxPayload): ()
 	end
 end
 
-function FxForms.Begin(value: Vector3): ()
+function FxForms.Begin(value: Vector3, fxQuality: FxKit.Quality): ()
 	origin = value
+	quality = fxQuality
 end
 
 function FxForms.SetViews(value: { AbilityView }): ()

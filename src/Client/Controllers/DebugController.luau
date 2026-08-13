@@ -1,10 +1,13 @@
 --!strict
 --[[
-	DebugController — отладочный оверлей: FPS, число отрисованных врагов, время забега.
+	DebugController — отладочный оверлей: FPS, число отрисованных врагов, FX
+	из пулов (тела/дуги/залпы/фигуры), время забега.
 
 	Существует ради критерия приёмки M1 («300 врагов держат 30+ FPS»): без цифр
-	на экране проверить это невозможно. Включается флагом Balance.Debug.showStats
-	и удаляется в M7 вместе с остальной отладкой.
+	на экране проверить это невозможно. Счётчик FX добавлен шагом 7 плана
+	эффектов (M7) — без него профилировочный проход слеп ровно к тому, что этот
+	шаг и настраивает (fxWaveSegments, fxSparks). Включается флагом
+	Balance.Debug.showStats и удаляется в M7 вместе с остальной отладкой.
 ]]
 
 local Players = game:GetService("Players")
@@ -14,6 +17,7 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local EnemyRenderController = require(script.Parent.EnemyRenderController)
+local FxKit = require(script.Parent.Parent.Fx.FxKit)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
 
@@ -44,12 +48,17 @@ local function onHeartbeat(deltaTime: number): ()
 	end
 
 	local enemies = EnemyRenderController.GetActiveCount()
+	local fx = FxKit.GetActiveCount()
 	local runTime = if runStartedAt >= 0 then os.clock() - runStartedAt else 0
 
 	text.Text = string.format(
-		"FPS %d   |   enemies %d   |   %02d:%02d",
+		"FPS %d   |   enemies %d   |   fx %d/%d/%d/%d   |   %02d:%02d",
 		math.floor(fps + 0.5),
 		enemies,
+		fx.bodies,
+		fx.beams,
+		fx.bursts,
+		fx.shapes,
 		math.floor(runTime / 60),
 		math.floor(runTime % 60)
 	)
@@ -73,7 +82,7 @@ function DebugController.Start(): ()
 	text.Name = "Stats"
 	text.AnchorPoint = Vector2.new(0, 0)
 	text.Position = UDim2.fromOffset(12, 12)
-	text.Size = UDim2.fromOffset(320, 24)
+	text.Size = UDim2.fromOffset(420, 24)
 	text.BackgroundColor3 = Palette.UI.panel
 	text.BackgroundTransparency = 0.35
 	text.BorderSizePixel = 0

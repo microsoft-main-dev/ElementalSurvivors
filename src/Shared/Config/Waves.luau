@@ -37,6 +37,14 @@
 	он знает и номер уровня, и долю фазы выживания, а расписание волн — только
 	время. Общего поля на оба случая не осталось намеренно: два механизма
 	для одного решения однажды разъехались бы.
+
+	ИМЕННО ПОЭТОМУ ключи здесь были багом: Bat и Ember остались тут с M1,
+	хотя из локаций их убрали ещё в M6 (Config/Enemies — они и сейчас там,
+	typeId завязан на порядок записей и удалять нельзя, но участвовать в бою
+	им незачем). У обоих нет вокселей — только примитивный шар/блок,
+	а в бесконечном режиме, единственном потребителе этой таблицы, они
+	молча спавнились без единой детали. Заменены на BigSlime и GoblinSwordsman
+	на тех же местах — состав волны по числу видов не менялся, только сами виды.
 ]]
 
 local Types = require(script.Parent.Parent.Types)
@@ -48,20 +56,20 @@ local Waves: { WaveEntry } = {
 	-- прежде, чем толпа начнёт что-то из себя представлять.
 	{ time = 0, spawnRate = 2, types = { "Slime" }, maxAlive = 30 },
 	{ time = 30, spawnRate = 3, types = { "Slime" }, maxAlive = 45 },
-	{ time = 60, spawnRate = 4, types = { "Slime", "Bat" }, maxAlive = 60 },
-	{ time = 90, spawnRate = 5, types = { "Slime", "Bat" }, maxAlive = 80 },
+	{ time = 60, spawnRate = 4, types = { "Slime", "BigSlime" }, maxAlive = 60 },
+	{ time = 90, spawnRate = 5, types = { "Slime", "BigSlime" }, maxAlive = 80 },
 
 	-- Со второй минуты плотность растёт равномерно до конца забега.
-	{ time = 120, spawnRate = 7, types = { "Slime", "Bat" }, maxAlive = 100 },
-	{ time = 165, spawnRate = 9, types = { "Slime", "Bat", "Ember" }, maxAlive = 125 },
-	{ time = 210, spawnRate = 12, types = { "Slime", "Bat", "Ember" }, maxAlive = 150 },
-	{ time = 255, spawnRate = 15, types = { "Slime", "Bat", "Ember" }, maxAlive = 180 },
-	{ time = 300, spawnRate = 19, types = { "Slime", "Bat", "Ember" }, maxAlive = 210 },
-	{ time = 345, spawnRate = 23, types = { "Slime", "Bat", "Ember" }, maxAlive = 240 },
-	{ time = 390, spawnRate = 28, types = { "Slime", "Bat", "Ember" }, maxAlive = 270 },
+	{ time = 120, spawnRate = 7, types = { "Slime", "BigSlime" }, maxAlive = 100 },
+	{ time = 165, spawnRate = 9, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 125 },
+	{ time = 210, spawnRate = 12, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 150 },
+	{ time = 255, spawnRate = 15, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 180 },
+	{ time = 300, spawnRate = 19, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 210 },
+	{ time = 345, spawnRate = 23, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 240 },
+	{ time = 390, spawnRate = 28, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 270 },
 
-	{ time = 435, spawnRate = 33, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
-	{ time = 480, spawnRate = 36, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
+	{ time = 435, spawnRate = 33, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
+	{ time = 480, spawnRate = 36, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
 
 	--[[
 		Вторая половина пятнадцатиминутного забега.
@@ -71,15 +79,15 @@ local Waves: { WaveEntry } = {
 		спавна: к этому времени билд собран, толпа выкашивается быстрее, и без
 		прибавки арена стояла бы полупустой.
 	]]
-	{ time = 540, spawnRate = 39, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
-	{ time = 600, spawnRate = 42, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
-	{ time = 660, spawnRate = 45, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
-	{ time = 720, spawnRate = 48, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
-	{ time = 780, spawnRate = 50, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
-	{ time = 840, spawnRate = 52, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
+	{ time = 540, spawnRate = 39, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
+	{ time = 600, spawnRate = 42, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
+	{ time = 660, spawnRate = 45, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
+	{ time = 720, spawnRate = 48, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
+	{ time = 780, spawnRate = 50, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
+	{ time = 840, spawnRate = 52, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
 
 	-- Последняя минута сюжетного забега и всё, что дальше в бесконечном.
-	{ time = 900, spawnRate = 54, types = { "Slime", "Bat", "Ember" }, maxAlive = 300 },
+	{ time = 900, spawnRate = 54, types = { "Slime", "BigSlime", "GoblinSwordsman" }, maxAlive = 300 },
 }
 
 for index, entry in Waves do

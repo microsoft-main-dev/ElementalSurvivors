@@ -24,17 +24,25 @@
 	показывается и прячется. Первое появление приходится на выбор карточки,
 	то есть на паузу левел-апа, — единственный момент боя, когда рывок не виден.
 
+	КАЧЕСТВО (шаг 7 плана FX, M7). Quality приходит один раз в Init и держится
+	весь забег — тем же способом, что renderDistance/modelEnemies у врагов
+	и кристаллов (Balance.Quality, SettingsController.ResolveQuality). На Low
+	ленты тел и залпы искр НЕ создаются вовсе, а не создаются и прячутся:
+	цена Trail/ParticleEmitter в частицах, которые они льют, а не в детали,
+	и скрытый залп искр эту цену всё равно платит.
+
 	Публичный API:
-		FxKit.Init()                       -- начало забега
+		FxKit.Init(quality)                -- начало забега
 		FxKit.Get(shape) -> Part
 		FxKit.Release(part)
 		FxKit.GetBody(modelKey, tints) -> PartModel.Built
 		FxKit.ReleaseBody(modelKey, body)
 		FxKit.GetBeam(from, to, width, head, tail) -> BeamRig
 		FxKit.ReleaseBeam(rig)
-		FxKit.Burst(position, color, count) -> BurstRig
+		FxKit.Burst(position, color, count) -> BurstRig?
 		FxKit.ReleaseBurst(rig)
 		FxKit.Clear()                      -- вернуть всё в пулы
+		FxKit.GetActiveCount() -> { bodies, beams, bursts, shapes }
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -87,11 +95,28 @@ export type BurstRig = {
 }
 
 --[[
+	Срез Balance.Quality, нужный только FX: ленты, искры, сегменты волны.
+	Отдельный тип, а не весь Balance.Quality.High целиком, — FxForms и FxKit
+	не имеют права знать про renderDistance или healthBars, это забота других
+	контроллеров.
+]]
+export type Quality = {
+	trails: boolean,
+	sparks: boolean,
+	waveSegments: number,
+}
+
+--[[
 	Сколько живёт залп искр. Держать деталь дольше незачем, а короче нельзя:
 	вместе с ней исчезнут и её частицы, оборвавшись на полпути.
 ]]
 local BURST_LIFE = 0.55
 FxKit.BurstLife = BURST_LIFE
+
+-- Значение по умолчанию совпадает с High: ничего не должно рисоваться до
+-- первого Init, но если что-то всё же спросит качество раньше — пусть будет
+-- полным, а не выключенным молча.
+local quality: Quality = { trails = true, sparks = true, waveSegments = 24 }
 
 local container: Folder? = nil
 local pools: { [Enum.PartType]: Pool.Pool<Part> } = {}
@@ -252,13 +277,19 @@ local function getBurstPool(): Pool.Pool<BurstRig>
 	return created
 end
 
-function FxKit.Init(): ()
+function FxKit.Init(value: Quality): ()
+	quality = value
+
 	getContainer()
 	for shape in WARMUP do
 		getPool(shape)
 	end
 	getBeamPool()
-	getBurstPool()
+	-- На Low залпов искр не будет вовсе (см. FxKit.Burst) — прогревать
+	-- пул, которым никто не воспользуется, незачем.
+	if quality.sparks then
+		getBurstPool()
+	end
 end
 
 function FxKit.Get(shape: Enum.PartType): Part
@@ -285,6 +316,14 @@ end
 	способности, а её стихия за забег не меняется. Разошлись бы они — цвет
 	пришлось бы навязывать каждому выданному телу заново, каждый кадр
 	перекрашивая десяток деталей.
+
+	quality.trails запекается в тело ТЕМ ЖЕ первым обращением — есть у тела
+	лента или нет, решается один раз при создании Part, а не выключателем.
+	Если качество сменится посреди сессии (переключатель в SettingsPanel,
+	а не только вход/выход), уже созданные тела донесут прежнее решение до
+	конца сессии: пул печёт лишь полтора десятка тел на всю игру, и это
+	дешевле, чем ронять и заново отстраивать то, что специально сделано
+	живущим между забегами.
 ]]
 function FxKit.GetBody(modelKey: string, tints: PartModel.Tints): PartModel.Built
 	local pool = bodyPools[modelKey]
@@ -292,7 +331,7 @@ function FxKit.GetBody(modelKey: string, tints: PartModel.Tints): PartModel.Buil
 		local def = assert(Models.ByKey[modelKey], `[FxKit] Нет модели тела "{modelKey}"`)
 
 		pool = Pool.new(function(): PartModel.Built
-			return PartModel.Build(def, tints, getContainer())
+			return PartModel.Build(def, tints, getContainer(), quality.trails)
 		end, function(body: PartModel.Built)
 			body.SetVisible(false)
 		end)
@@ -341,7 +380,13 @@ function FxKit.ReleaseBeam(rig: BeamRig): ()
 	getBeamPool().Release(rig)
 end
 
-function FxKit.Burst(position: Vector3, color: Color3, count: number): BurstRig
+function FxKit.Burst(position: Vector3, color: Color3, count: number): BurstRig?
+	-- На Low залп искр не создаётся вовсе, а не создаётся и гасится молча:
+	-- ParticleEmitter стоит частицами, которые он льёт, а не самой деталью.
+	if not quality.sparks then
+		return nil
+	end
+
 	local rig = getBurstPool().Get()
 	rig.part.CFrame = CFrame.new(position)
 	rig.part.Parent = getContainer()
@@ -352,6 +397,32 @@ end
 
 function FxKit.ReleaseBurst(rig: BurstRig): ()
 	getBurstPool().Release(rig)
+end
+
+--[[
+	Сколько объектов FX сейчас выдано из пулов — для отладочного оверлея
+	(DebugController), тем же способом, что EnemyRenderController.GetActiveCount.
+
+	shapes считает Block/Cylinder разом: это ровно то, из чего собраны кольцо
+	Nova и контур ауры, и ровно то, что двигает fxWaveSegments.
+]]
+function FxKit.GetActiveCount(): { bodies: number, beams: number, bursts: number, shapes: number }
+	local bodies = 0
+	for _, pool in bodyPools do
+		bodies += pool.ActiveCount()
+	end
+
+	local shapes = 0
+	for _, pool in pools do
+		shapes += pool.ActiveCount()
+	end
+
+	return {
+		bodies = bodies,
+		beams = if beamPool then beamPool.ActiveCount() else 0,
+		bursts = if burstPool then burstPool.ActiveCount() else 0,
+		shapes = shapes,
+	}
 end
 
 function FxKit.Clear(): ()

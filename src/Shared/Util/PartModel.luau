@@ -25,9 +25,13 @@
 	с деталью, дальше только включаются и выключаются вместе с моделью —
 	создавать их в бою нельзя ровно так же, как и детали.
 
+	allowFx (4-й параметр Build) выключает ленты и искры целиком, не создавая
+	Trail/ParticleEmitter вовсе: это рычаг качества FX (шаг 7 плана, M7),
+	и на Low их не создать дешевле, чем создать и держать выключенными.
+
 	Публичный API:
 		PartModel.TintsFor(base, accent) -> Tints
-		PartModel.Build(def, tints, parent) -> Built
+		PartModel.Build(def, tints, parent, allowFx?) -> Built
 			built.Draw(pivot, deltaTime, speed)
 			built.SetVisible(visible)
 			built.SetTints(tints)
@@ -162,7 +166,8 @@ local function paintTrail(entry: TrailEntry, tints: Tints): ()
 	entry.trail.Color = ColorSequence.new(head, tail)
 end
 
-function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
+function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance, allowFx: boolean?): Built
+	local fxAllowed = allowFx ~= false
 	local folder = Instance.new("Folder")
 	folder.Name = `Model_{def.key}`
 	folder.Parent = parent
@@ -250,7 +255,7 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 			висит невидимой до спавна и хвостом по арене мести не должна.
 		]]
 		local trailDef = partDef.trail
-		if trailDef then
+		if trailDef and fxAllowed then
 			local half = trailDef.length * 0.5
 
 			local top = Instance.new("Attachment")
@@ -292,7 +297,7 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance): Built
 			живёт, пока живёт способность, и вспышками тут управлять нечем.
 		]]
 		local particlesDef = partDef.particles
-		if particlesDef then
+		if particlesDef and fxAllowed then
 			local spread = particlesDef.spread or 0
 			local emitter = Instance.new("ParticleEmitter")
 			--[[

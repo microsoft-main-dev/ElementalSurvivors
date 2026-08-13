@@ -23,6 +23,7 @@ local Balance = require(Shared.Config.Balance)
 local FxForms = require(script.Parent.Parent.Fx.FxForms)
 local FxKit = require(script.Parent.Parent.Fx.FxKit)
 local Net = require(Shared.Net)
+local SettingsController = require(script.Parent.SettingsController)
 local Types = require(Shared.Types)
 
 local AbilityFxController = {}
@@ -66,8 +67,17 @@ function AbilityFxController.Start(): ()
 	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(function(slot: number)
 		shutdown()
 
-		FxKit.Init()
-		FxForms.Begin(Vector3.new(slot * Balance.Arena.spacing, 0, 0))
+		-- Качество читается один раз на весь забег, тем же способом, что
+		-- у EnemyRenderController/CrystalRenderController.
+		local tier = Balance.Quality[SettingsController.ResolveQuality()]
+		local fxQuality: FxKit.Quality = {
+			trails = tier.fxTrails,
+			sparks = tier.fxSparks,
+			waveSegments = tier.fxWaveSegments,
+		}
+
+		FxKit.Init(fxQuality)
+		FxForms.Begin(Vector3.new(slot * Balance.Arena.spacing, 0, 0), fxQuality)
 
 		paused = false
 		active = true
