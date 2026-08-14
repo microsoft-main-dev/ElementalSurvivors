@@ -613,6 +613,9 @@ function LobbyController.Start(): ()
 	Net.GetEvent(Net.Id.ProfileView).OnClientEvent:Connect(function(view: Types.ProfileView)
 		profileView = view
 		refreshPanels()
+		-- Стела у портала показывает тот же прогресс, что и панель выбора
+		-- уровня, и берёт его из того же среза.
+		LobbyDecorController.SetStoryProgress(view)
 	end)
 
 	Net.GetEvent(Net.Id.PetsView).OnClientEvent:Connect(function(view: Types.PetsView)

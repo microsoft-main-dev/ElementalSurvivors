@@ -29,6 +29,9 @@
 local ArenaProps = require(script.Parent.Parent.Config.ArenaProps)
 local Balance = require(script.Parent.Parent.Config.Balance)
 local Biomes = require(script.Parent.Parent.Config.Biomes)
+-- Псевдоним, а не Decor: ниже экспортируется тип с таким же именем, и внутри
+-- псевдонима типа модуль и тип различить было бы нечем.
+local DecorKit = require(script.Parent.Decor)
 local RNG = require(script.Parent.RNG)
 
 export type Obstacle = {
@@ -45,19 +48,10 @@ export type Obstacle = {
 }
 
 --[[
-	Единица декора: что поставить, где и какого размера.
-
-	parts заполнены только у холма — его детали считаются от радиуса и высоты
-	функцией ArenaProps.HillParts, а не берутся готовой записью. У всех
-	остальных стоит ключ модели, и детали берутся из ArenaProps.ByKey.
+	Единица декора живёт в Shared/Util/Decor: её строит не только арена.
+	Имя здесь остаётся прежним — на него ссылается весь клиентский декор.
 ]]
-export type Decor = {
-	key: string,
-	parts: { ArenaProps.PartDef }?,
-	position: Vector3,
-	yaw: number, -- градусы
-	scale: number,
-}
+export type Decor = DecorKit.Item
 
 local ArenaLayout = {}
 
@@ -65,7 +59,6 @@ local MAX_ATTEMPTS_PER_ITEM = 40
 local MIN_GAP = 8 -- минимальный просвет между препятствиями, чтобы не было глухих стен
 local TREE_GAP = 4 -- дереву у подножия холма тесниться можно, оно тонкое
 local EXIT_CLEARANCE = 22
-local SCATTER_ATTEMPTS = 8
 
 --[[
 	Свободна ли точка: не в круге спавна игрока, не на площадке выхода и
@@ -214,110 +207,40 @@ end
 	Внутрь препятствий не попадает (куст, торчащий из холма, читается
 	ошибкой), но круг спавна и площадку выхода не обходит: сквозь эту
 	мелочь ходят, и запрещать ей расти там, где стоит игрок, незачем.
-
-	Трава считается отдельным списком, потому что у неё свой бюджет: она
-	дешевле всего поштучно и её больше всего, и режется на слабых машинах
-	первой.
 ]]
 function ArenaLayout.Decor(seed: number, biome: Biomes.BiomeDef, scatter: number, grass: number): { Decor }
-	local rng = RNG.new(seed + 2)
 	local obstacles = ArenaLayout.Generate(seed)
-	local half = Balance.Arena.size * 0.5 - 10
 
-	local result: { Decor } = {}
-
-	local function place(list: { Biomes.Species }, count: number): ()
-		for _ = 1, count do
-			--[[
-				Несколько попыток на предмет, а не поиск свободного места
-				до победного: не поместившийся куст просто не ставится.
-				Пустое место в лесу глазу незаметно, а зависший цикл
-				на старте забега — очень даже.
-			]]
-			for _ = 1, SCATTER_ATTEMPTS do
-				local x = rng.NextNumber(-half, half)
-				local z = rng.NextNumber(-half, half)
-
-				local blocked = false
-				for _, obstacle in obstacles do
-					local dx = x - obstacle.position.X
-					local dz = z - obstacle.position.Z
-					if dx * dx + dz * dz < obstacle.radius * obstacle.radius then
-						blocked = true
-						break
-					end
-				end
-
-				if not blocked then
-					local species = Biomes.Pick(list, rng)
-					table.insert(result, {
-						key = species.key,
-						parts = nil,
-						position = Vector3.new(x, 0, z),
-						yaw = rng.NextNumber(0, 360),
-						scale = rng.NextNumber(species.minScale, species.maxScale),
-					})
-					break
-				end
+	--[[
+		Единственное, чем расстановка арены отличается от расстановки поляны
+		лобби: там мелочь обходит препятствия, здесь — площадь и предметы.
+		Всё остальное общее и живёт в Shared/Util/Decor.
+	]]
+	local function blocked(position: Vector3): boolean
+		for _, obstacle in obstacles do
+			local dx = position.X - obstacle.position.X
+			local dz = position.Z - obstacle.position.Z
+			if dx * dx + dz * dz < obstacle.radius * obstacle.radius then
+				return true
 			end
 		end
+
+		return false
 	end
 
-	place(biome.scatter, scatter)
-	place(biome.grass, grass)
-
-	return result
+	return DecorKit.Scatter(seed + 2, biome, scatter, grass, Balance.Arena.size * 0.5 - 10, blocked)
 end
 
 --[[
 	Опушка: стена леса за периметром арены.
 
-	Стволы стоят ЗА невидимой стеной и коллизии не имеют — она там уже есть.
-	Глубина у каждого своя, поэтому один проход по периметру даёт неровную
-	полосу в несколько стволов, а не забор в одну линию.
-
-	step приходит из качества: периметр арены — 1600 стадов, и цена шага
-	умножается на полторы сотни стволов.
+	Сама расстановка общая (Shared/Util/Decor) — такая же опушка стоит вокруг
+	поляны лобби. Здесь остаются только числа арены; смещение seed сохранено,
+	иначе тот же seed дал бы другой лес, чем до переезда.
 ]]
 function ArenaLayout.TreeLine(seed: number, biome: Biomes.BiomeDef, step: number): { Decor }
 	local numbers = Balance.Arena
-	local rng = RNG.new(seed + 3)
-	local half = numbers.size * 0.5
-	local near = half + numbers.treeLineOffset
-	local far = near + numbers.treeLineDepth
-
-	local result: { Decor } = {}
-
-	--[[
-		Проход по четырём сторонам. Вдоль стороны идём от -far до +far,
-		чтобы углы закрылись сами: стволы соседних сторон там встретятся
-		и встанут гуще, а угол — это как раз то место, откуда видно
-		дальше всего.
-	]]
-	local sides = { Vector3.new(0, 0, -1), Vector3.new(0, 0, 1), Vector3.new(-1, 0, 0), Vector3.new(1, 0, 0) }
-
-	for _, side in sides do
-		local along = Vector3.new(side.Z, 0, side.X)
-		local position = -far
-
-		while position <= far do
-			local depth = rng.NextNumber(near, far)
-			local offset = rng.NextNumber(-step * 0.4, step * 0.4)
-			local species = Biomes.Pick(biome.treeLine, rng)
-
-			table.insert(result, {
-				key = species.key,
-				parts = nil,
-				position = side * depth + along * (position + offset),
-				yaw = rng.NextNumber(0, 360),
-				scale = rng.NextNumber(species.minScale, species.maxScale),
-			})
-
-			position += step
-		end
-	end
-
-	return result
+	return DecorKit.TreeRing(seed + 3, biome, step, numbers.size * 0.5, numbers.treeLineOffset, numbers.treeLineDepth)
 end
 
 return ArenaLayout

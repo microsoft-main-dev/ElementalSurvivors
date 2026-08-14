@@ -272,9 +272,14 @@ local Palette = {
 		grass = Color3.fromHex("#3E7A3C"),
 		plaza = Color3.fromHex("#8E8C7E"),
 		plazaRim = Color3.fromHex("#5F5E55"),
+		--[[
+			Светлый камень вделанных в плиту кладок: круг на месте появления
+			и дорожка к порталу. Тон один намеренно — это одна и та же кладка,
+			ведущая от места, где игрок появляется, туда, куда он идёт.
+		]]
+		plazaInlay = Color3.fromHex("#A7A79C"),
 		floor = Color3.fromHex("#20302A"),
 		floorAccent = Color3.fromHex("#27392F"),
-		border = Color3.fromHex("#175C3D"),
 		portal = Color3.fromHex("#4FA97C"),
 		portalGlow = Color3.fromHex("#8FD3AC"),
 		sign = Color3.fromHex("#1A241F"),

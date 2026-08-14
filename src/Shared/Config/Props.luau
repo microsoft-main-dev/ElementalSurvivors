@@ -25,8 +25,11 @@
 	и дублировать её ради одной таблицы незачем.
 
 	Публичный API:
-		Props.ByKey        -- модели по ключу
-		Props.Placements   -- что где стоит в лобби
+		Props.ByKey            -- модели по ключу
+		Props.Placements       -- что где стоит в лобби
+		Props.PortalWalk       -- крыльцо портала и дорожка к нему, четыре плиты
+		Props.SpawnInlayRadius -- радиус круга на месте появления
+		Props.StelaFace        -- куда вешать надпись прогресса на стеле
 ]]
 
 local Balance = require(script.Parent.Balance)
@@ -984,6 +987,61 @@ local definitions: { ModelDef } = {
 		пульсация на фонаре читается приборной лампой, а живой огонь —
 		нет. Плафон полупрозрачный, чтобы мигал свет, а не крашеный кубик.
 	]]
+	--[[
+		Стела прогресса сюжета. Камень, а не доска: у неё нет промпта и её
+		не нажимают — она просто стоит и показывает, где игрок в истории.
+
+		Текст вешает клиент на Props.StelaFace, тем же способом, что легенду
+		колеса: сборщик предметов делает только детали, а надписи — SurfaceGui.
+		Тёмная плита в лице нужна ровно для того, чтобы буквы легли на ровное,
+		а не на светлый камень со швами.
+
+		Увеличена в полтора раза по просьбе владельца: со своей прежней высотой
+		в девять стадов она терялась рядом с фонарями в десять с половиной.
+		Теперь четырнадцать — выше фонаря, ниже портала.
+	]]
+	{
+		key = "Stela",
+		parts = {
+			{
+				shape = "Block",
+				size = Vector3.new(6.9, 1.35, 4.8),
+				offset = Vector3.new(0, 0.68, 0),
+				color = "stoneDark",
+				material = Enum.Material.Slate,
+			},
+			{
+				shape = "Block",
+				size = Vector3.new(5.1, 10.8, 3),
+				offset = Vector3.new(0, 6.75, 0),
+				color = "stone",
+				material = Enum.Material.Slate,
+			},
+			{
+				shape = "Block",
+				size = Vector3.new(4.35, 6.9, 0.3),
+				offset = Vector3.new(0, 7.35, -1.43),
+				color = "shadow",
+			},
+			{
+				shape = "Block",
+				size = Vector3.new(6, 0.9, 3.9),
+				offset = Vector3.new(0, 12.6, 0),
+				color = "stoneDark",
+				material = Enum.Material.Slate,
+			},
+			{
+				shape = "Block",
+				size = Vector3.new(3.3, 1.35, 2.1),
+				offset = Vector3.new(0, 13.65, 0),
+				color = "stone",
+				material = Enum.Material.Slate,
+			},
+		},
+		footprint = 0,
+		height = 0,
+	},
+
 	{
 		key = "Lamp",
 		parts = {
@@ -1621,9 +1679,34 @@ local LAYOUT = {
 	portal = Vector3.new(0, 0, -PLAZA - 1),
 	leaderboard = Vector3.new(-PLAZA * 0.71, 0, 0),
 	quests = Vector3.new(PLAZA * 0.71, 0, 0),
-	shop = Vector3.new(-PLAZA * 0.62, 0, PLAZA * 0.55),
+	--[[
+		Лавка стоит СЛЕВА ОТ ПОРТАЛА (решение владельца по его схеме), зеркально
+		стеле справа. Раньше она была на юго-западе, вместе с яйцами и колесом,
+		и весь торговый ряд собирался в одной половине площади.
+
+		Симметрия здесь работает: два объекта под 45° к порталу читаются
+		обрамлением входа, а не случайными соседями. Плюс у лавки есть свои
+		два фонаря — единственный настоящий свет в лобби, — и на подходе
+		к порталу он полезнее, чем в углу за спиной.
+	]]
+	shop = Vector3.new(-PLAZA * 0.58, 0, -PLAZA * 0.58),
 	wheel = Vector3.new(PLAZA * 0.62, 0, PLAZA * 0.55),
-	petStand = Vector3.new(0, 0, PLAZA * 0.37),
+	--[[
+		Тумба питомца переехала на прежнее место лавки. В центре площади она
+		стояла на пути от круга появления к порталу и была единственным
+		объектом, к которому подходили не с края, а насквозь.
+	]]
+	petStand = Vector3.new(-PLAZA * 0.62, 0, PLAZA * 0.55),
+	--[[
+		Стела прогресса. Стоит в общем ряду по краю площади, а не особняком
+		у дорожки: нажимать её не нужно, но читают её так же, как читают
+		доску квестов, — подойдя и остановившись.
+
+		Направление выбрано по самому широкому свободному просвету: 45° и
+		до портала, и до доски квестов. Между ними единственная дуга, куда
+		она встаёт, никого не заслоняя.
+	]]
+	stela = Vector3.new(PLAZA * 0.58, 0, -PLAZA * 0.58),
 	-- Проставляется ниже: ряд считается от числа яиц, а не подбирается долей.
 	eggRow = 0,
 	eggSpacing = 16,
@@ -1693,6 +1776,7 @@ local placements: { Placement } = {
 	{ key = "QuestBoard", position = LAYOUT.quests, yaw = facingCentre(LAYOUT.quests.X, LAYOUT.quests.Z) },
 	{ key = "ShopStall", position = LAYOUT.shop, yaw = facingCentre(LAYOUT.shop.X, LAYOUT.shop.Z) },
 	{ key = "PetStand", position = LAYOUT.petStand, yaw = 0 },
+	{ key = "Stela", position = LAYOUT.stela, yaw = facingCentre(LAYOUT.stela.X, LAYOUT.stela.Z) },
 	{
 		key = "Merchant",
 		position = LAYOUT.shop + Vector3.new(0, 0, 0),
@@ -1744,6 +1828,117 @@ local wheelRight = CFrame.Angles(0, math.rad(wheelYaw), 0) * Vector3.new(15, 0, 
 table.insert(placements, { key = "WheelSign", position = LAYOUT.wheel + wheelRight, yaw = wheelYaw + 25 })
 
 --[[
+	КРЫЛЬЦО ПОРТАЛА И ДОРОЖКА К НЕМУ.
+
+	Портал стоит за краем плиты, и до этого стоял в чистом поле: между кругом
+	появления и им лежало шестьдесят стадов пустой мостовой, а сам он ничем
+	не был связан с площадью. Крыльцо заходит на плиту и потому читается её
+	продолжением, а дорожка выложена ТЕМ ЖЕ камнем, что и круг появления:
+	одна кладка от места, где игрок появляется, до места, куда он идёт.
+
+	Считается в системе координат самого портала, а не в осях мира: перенеси
+	его по краю площади — крыльцо с дорожкой поедут следом и развернутся сами.
+
+	Наружу отдаются четыре готовых прямоугольника, а не размеры с правилами их
+	сложения: у каймы и заливки разные длины (кайма дорожки упирается в кайму
+	крыльца, а заливка — в заливку), и собирать это на стороне LobbyService
+	значило бы держать половину планировки там.
+]]
+local APRON_WIDTH = 30
+local APRON_DEPTH = 26
+local APRON_BEHIND = 8 -- сколько крыльца уходит ЗА портал
+local PATH_WIDTH = 12
+local WALK_RIM = 3 -- насколько кайма шире заливки с каждой стороны
+
+--[[
+	Радиус круга, вделанного в плиту на месте появления. Здесь, а не в
+	LobbyService, потому что отсюда начинается дорожка к порталу.
+
+	КРУГ ОБЯЗАН БЫТЬ ШИРЕ ДОРОЖКИ С КАЙМОЙ. Дорожка — прямоугольник, и упёртая
+	в окружность по касательной она сходится с ней ровно в одной точке: по краям
+	её ширины оставался полумесяц голой плиты, и стык читался незаконченным.
+	Начинается она поэтому ХОРДОЙ ВНУТРИ круга — той, что проходит через точки
+	касания её собственных углов, — и дальше идёт поверх него.
+]]
+Props.SpawnInlayRadius = 11
+
+local portalYaw = facingCentre(LAYOUT.portal.X, LAYOUT.portal.Z)
+local portalFrame = CFrame.new(LAYOUT.portal) * CFrame.Angles(0, math.rad(portalYaw), 0)
+
+-- Локальный -Z смотрит в центр площади (так же, как лицевая сторона портала).
+local apronNear = -(APRON_DEPTH - APRON_BEHIND)
+local apronRimNear = apronNear - WALK_RIM
+local walkHalf = PATH_WIDTH * 0.5 + WALK_RIM -- половина ширины дорожки по кайме
+
+assert(
+	walkHalf < Props.SpawnInlayRadius,
+	`[Props] Дорожка ({walkHalf * 2}) шире круга появления ({Props.SpawnInlayRadius * 2}): стыковать их нечем`
+)
+
+--[[
+	Угол дорожки садится на саму окружность: по хорде на этом расстоянии от
+	центра круга её половина ширины и радиус сходятся ровно в точке касания.
+]]
+local walkStart = -(LAYOUT.portal.Magnitude - math.sqrt(Props.SpawnInlayRadius ^ 2 - walkHalf ^ 2))
+
+assert(
+	walkStart < apronRimNear,
+	`[Props] Крыльцо портала достаёт до круга появления: дорожке осталось {apronRimNear - walkStart} стадов`
+)
+
+local function walkSlab(width: number, from: number, to: number): { cframe: CFrame, size: Vector2 }
+	return table.freeze({
+		cframe = portalFrame * CFrame.new(0, 0, (from + to) * 0.5),
+		size = Vector2.new(width, math.abs(to - from)),
+	})
+end
+
+Props.PortalWalk = {
+	apronRim = walkSlab(APRON_WIDTH + WALK_RIM * 2, apronRimNear, APRON_BEHIND + WALK_RIM),
+	apron = walkSlab(APRON_WIDTH, apronNear, APRON_BEHIND),
+	pathRim = walkSlab(PATH_WIDTH + WALK_RIM * 2, walkStart, apronRimNear),
+	path = walkSlab(PATH_WIDTH, walkStart, apronNear),
+}
+
+--[[
+	Фонари у входа. ЭТО ИСКЛЮЧЕНИЕ ИЗ ПРАВИЛА РАССТАНОВКИ ФОНАРЕЙ НИЖЕ,
+	и сделано оно осознанно.
+
+	Кольцевой фонарь освещает площадь и потому обязан уступать направление
+	любому объекту взаимодействия. Эти двое не освещают площадь — они
+	обрамляют вход, и место у них не своё, а порталово: они стоят по углам
+	крыльца, в его системе координат. Заслонить портал они не могут, он вдвое
+	выше их и шире, чем просвет между ними.
+
+	Их направления помечаются занятыми ниже: иначе ближайший кольцевой фонарь
+	встал бы к ним вплотную и все трое читались бы кучей.
+]]
+local portalLampOffsets = {
+	Vector3.new(APRON_WIDTH * 0.5 - 2, 0, -6),
+	Vector3.new(-(APRON_WIDTH * 0.5 - 2), 0, -6),
+}
+
+local portalLamps: { Vector3 } = {}
+
+for _, offset in portalLampOffsets do
+	local point = portalFrame * offset
+	table.insert(portalLamps, point)
+	table.insert(placements, { key = "Lamp", position = point, yaw = 0 })
+end
+
+--[[
+	Где у стелы лицо и какого оно размера, относительно её основания.
+	Отсюда клиент узнаёт, куда вешать SurfaceGui с прогрессом сюжета.
+
+	Лежит рядом с самой стелой по той же причине, что WheelSignFace: высота
+	плиты в модели и высота надписи на ней обязаны меняться вместе.
+]]
+Props.StelaFace = {
+	offset = Vector3.new(0, 7.35, -1.68),
+	size = Vector2.new(4.05, 6.45),
+}
+
+--[[
 	Зелень за площадью. Раскладывается по seed, а не списком координат:
 	деревьев и цветов теперь под сотню, и просматривать такой список глазами
 	уже дороже, чем довериться генератору.
@@ -1756,24 +1951,65 @@ table.insert(placements, { key = "WheelSign", position = LAYOUT.wheel + wheelRig
 local greenery = RNG.new(20260812)
 local edge = Balance.Lobby.floorSize * 0.5 - 6
 
+--[[
+	Растёт ли эта точка на камне крыльца портала.
+
+	Кольцо зелени начинается в четырёх стадах за краем площади, а крыльцо
+	уходит за него на дюжину — цветок, выросший прямо из кладки за порталом,
+	владелец увидел на первом же скриншоте.
+
+	Экспортируется, потому что подлесок поляны (LobbyForestController) обязан
+	обходить ту же кладку по тому же правилу, а второе её описание разъехалось
+	бы с этим при первой правке крыльца.
+
+	ВАЖНО, ЧТО ДЛЯ ЗЕЛЕНИ НИЖЕ ЭТО ОТКАЗ, А НЕ ПЕРЕСТАНОВКА. Попытаться
+	поставить в другом месте — значит взять из генератора лишние числа, а он
+	один на всю зелень: сдвинулись бы ВСЕ последующие деревья и цветы разом,
+	хотя претензия была к одному. Поэтому точка просто не занимается: из
+	полусотни цветов пропажу одного заметить невозможно. У подлеска правило
+	другое — он новый, и его расстановке ничем не обязан никто.
+]]
+local WALK_CLEARANCE = 3
+
+function Props.OnPortalWalk(position: Vector3): boolean
+	local spot = portalFrame:PointToObjectSpace(position)
+	local halfWidth = APRON_WIDTH * 0.5 + WALK_RIM + WALK_CLEARANCE
+
+	return math.abs(spot.X) <= halfWidth
+		and spot.Z <= APRON_BEHIND + WALK_RIM + WALK_CLEARANCE
+		and spot.Z >= apronRimNear - WALK_CLEARANCE
+end
+
 for index = 1, 30 do
 	local angle = greenery.NextNumber(0, math.pi * 2)
 	local distance = greenery.NextNumber(PLAZA + 9, edge)
-	table.insert(placements, {
-		key = if index % 2 == 0 then "TreeA" else "TreeB",
-		position = Vector3.new(math.sin(angle) * distance, 0, math.cos(angle) * distance),
-		yaw = greenery.NextNumber(0, 360),
-	})
+	-- Разворот берётся ВСЕГДА, даже у пропущенного: иначе отказ съедет весь
+	-- поток случайных чисел, ради чего он и не переставляет ничего.
+	local yaw = greenery.NextNumber(0, 360)
+	local position = Vector3.new(math.sin(angle) * distance, 0, math.cos(angle) * distance)
+
+	if not Props.OnPortalWalk(position) then
+		table.insert(placements, {
+			key = if index % 2 == 0 then "TreeA" else "TreeB",
+			position = position,
+			yaw = yaw,
+		})
+	end
 end
 
 for index = 1, 54 do
 	local angle = greenery.NextNumber(0, math.pi * 2)
 	local distance = greenery.NextNumber(PLAZA + 4, edge)
-	table.insert(placements, {
-		key = `Flower{index % 3 + 1}`,
-		position = Vector3.new(math.sin(angle) * distance, 0, math.cos(angle) * distance),
-		yaw = greenery.NextNumber(0, 360),
-	})
+	local yaw = greenery.NextNumber(0, 360)
+	local position = Vector3.new(math.sin(angle) * distance, 0, math.cos(angle) * distance)
+
+	if not Props.OnPortalWalk(position) then
+		table.insert(placements, {
+			key = `Flower{index % 3 + 1}`,
+			position = position,
+			yaw = yaw,
+		})
+	end
 end
 
 --[[
@@ -1804,12 +2040,20 @@ local function markOccupied(x: number, z: number): ()
 	table.insert(occupiedAngles, math.deg(math.atan2(x, z)) % 360)
 end
 
-for _, point in { LAYOUT.portal, LAYOUT.leaderboard, LAYOUT.quests, LAYOUT.shop, LAYOUT.wheel, LAYOUT.petStand } do
+for _, point in
+	{ LAYOUT.portal, LAYOUT.leaderboard, LAYOUT.quests, LAYOUT.shop, LAYOUT.wheel, LAYOUT.petStand, LAYOUT.stela }
+do
 	markOccupied(point.X, point.Z)
 end
 
 for index = 1, #Eggs.List do
 	markOccupied(eggStart + (index - 1) * LAYOUT.eggSpacing, LAYOUT.eggRow)
+end
+
+-- Фонари крыльца стоят вне этого правила, но место занимают: кольцевой фонарь
+-- обязан отойти и от них, иначе трое сойдутся в одну кучу у портала.
+for _, point in portalLamps do
+	markOccupied(point.X, point.Z)
 end
 
 -- Кратчайший угол между направлениями: 350 и 10 отстоят на двадцать градусов,
@@ -2025,5 +2269,9 @@ table.freeze(Props.PodiumPlates)
 -- бросает исключение и роняет модуль, а с ним и всё лобби.
 table.freeze(Props.Anchors)
 table.freeze(Props.WheelSignFace)
+table.freeze(Props.StelaFace)
+-- Сами плиты заморожены при сборке: у них внутри CFrame, и морозить их
+-- отдельно снаружи значило бы помнить про каждую новую.
+table.freeze(Props.PortalWalk)
 
 return Props

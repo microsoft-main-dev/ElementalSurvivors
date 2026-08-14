@@ -29,6 +29,7 @@ local Palette = require(Shared.Config.Palette)
 local PartModel = require(Shared.Util.PartModel)
 local Props = require(Shared.Config.Props)
 local Sounds = require(Shared.Config.Sounds)
+local Stages = require(Shared.Config.Stages)
 local Types = require(Shared.Types)
 local UiKit = require(script.Parent.Parent.UI.UiKit)
 
@@ -66,6 +67,10 @@ local elapsed = 0
 ]]
 local WHEEL_TURNS = 4
 local plates: { TextLabel } = {}
+-- Строки стелы прогресса. Заполняются, когда приедет ProfileView.
+local stelaLocation: TextLabel? = nil
+local stelaStage: TextLabel? = nil
+local stelaTotal: TextLabel? = nil
 local wheelSpin = 0
 local wheelFrom = 0
 local wheelTo = 0
@@ -192,6 +197,78 @@ local function buildWheelSign(parent: Instance, base: CFrame): ()
 	end
 end
 
+--[[
+	Лицо стелы: где игрок читает, докуда дошёл сюжет.
+
+	Никакого нового Remote под это не заводится: storyStage уже приходит
+	в ProfileView, а во что он разворачивается — знает Config/Stages, и знает
+	один. Стела, посчитавшая номер локации своей формулой, разошлась бы
+	с панелью у портала на первой же правке состава локаций.
+]]
+local function buildStela(parent: Instance, base: CFrame): ()
+	local face = Props.StelaFace
+
+	local board = Instance.new("Part")
+	board.Name = "StelaFace"
+	board.Size = Vector3.new(face.size.X, face.size.Y, 0.2)
+	board.CFrame = base * CFrame.new(face.offset)
+	board.Anchored = true
+	board.CanCollide = false
+	board.CanQuery = false
+	board.CanTouch = false
+	board.Transparency = 1
+	board.Parent = parent
+
+	local surface = Instance.new("SurfaceGui")
+	surface.Name = "Progress"
+	surface.Face = Enum.NormalId.Front
+	surface.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surface.PixelsPerStud = 60
+	surface.LightInfluence = 0
+	surface.Parent = board
+
+	local holder = Instance.new("Frame")
+	holder.Size = UDim2.fromScale(1, 1)
+	holder.BackgroundTransparency = 1
+	holder.Parent = surface
+
+	UiKit.Padding(holder, 10)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 6)
+	layout.Parent = holder
+
+	--[[
+		Размеры считаны от лица: 4.05 на 6.45 стада при 60 точках на стад —
+		это 243 на 387 точек. Строки вместе с отступами занимают около 270,
+		остальное остаётся полями.
+	]]
+	local caption = UiKit.Label(holder, "Caption", "STORY", 27, Palette.UI.subtext)
+	caption.Size = UDim2.new(1, 0, 0, 39)
+	caption.TextXAlignment = Enum.TextXAlignment.Center
+	caption.LayoutOrder = 0
+
+	stelaLocation = UiKit.Label(holder, "Location", "—", 39, Palette.UI.text)
+	stelaLocation.Font = Enum.Font.GothamBold
+	-- Две строки: названия локаций длинные, а стела узкая.
+	stelaLocation.TextWrapped = true
+	stelaLocation.Size = UDim2.new(1, 0, 0, 114)
+	stelaLocation.TextXAlignment = Enum.TextXAlignment.Center
+	stelaLocation.LayoutOrder = 1
+
+	stelaStage = UiKit.Label(holder, "Stage", "—", 33, Palette.UI.text)
+	stelaStage.Size = UDim2.new(1, 0, 0, 48)
+	stelaStage.TextXAlignment = Enum.TextXAlignment.Center
+	stelaStage.LayoutOrder = 2
+
+	stelaTotal = UiKit.Label(holder, "Total", "—", 27, Palette.UI.subtext)
+	stelaTotal.Size = UDim2.new(1, 0, 0, 39)
+	stelaTotal.TextXAlignment = Enum.TextXAlignment.Center
+	stelaTotal.LayoutOrder = 3
+end
+
 local function build(): ()
 	local parent = Instance.new("Folder")
 	parent.Name = "LobbyDecor"
@@ -239,6 +316,8 @@ local function build(): ()
 			buildPlates(parent, pivot)
 		elseif placement.key == "WheelSign" then
 			buildWheelSign(parent, pivot)
+		elseif placement.key == "Stela" then
+			buildStela(parent, pivot)
 		end
 	end
 end
@@ -356,6 +435,39 @@ function LobbyDecorController.SetLeaderboard(entries: { Types.LeaderboardEntry }
 			label.Text = `{index}. —`
 		end
 	end
+end
+
+--[[
+	Обновить стелу прогресса.
+
+	storyStage — это ПЕРВЫЙ НЕПРОЙДЕННЫЙ уровень, а не последний пройденный.
+	Поэтому «Stage 3 of 5» означает, что игрок стоит перед третьим, а не
+	прошёл третий, и когда он перевалит за последний уровень последней
+	локации, LocationFor вернёт nil — тогда на стеле нечего считать
+	и она говорит, что сюжет пройден.
+]]
+function LobbyDecorController.SetStoryProgress(view: Types.ProfileView): ()
+	local location = stelaLocation
+	local stage = stelaStage
+	local total = stelaTotal
+
+	if not location or not stage or not total then
+		return
+	end
+
+	local stageIndex = math.min(view.storyStage, Stages.TotalLevels)
+	local def, insideIndex = Stages.LocationFor(stageIndex)
+
+	if not def then
+		location.Text = "All stages cleared"
+		stage.Text = "—"
+		total.Text = `{Stages.TotalLevels} / {Stages.TotalLevels}`
+		return
+	end
+
+	location.Text = def.displayName
+	stage.Text = `Stage {insideIndex} of {def.levels}`
+	total.Text = `{stageIndex} / {Stages.TotalLevels}`
 end
 
 function LobbyDecorController.Start(): ()

@@ -30,7 +30,6 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
-local Branding = require(Shared.Config.Branding)
 local Palette = require(Shared.Config.Palette)
 local Props = require(Shared.Config.Props)
 
@@ -106,6 +105,69 @@ local function makePart(name: string, size: Vector3, position: Vector3, color: C
 	return part
 end
 
+--[[
+	Крыльцо портала и дорожка от круга появления к нему.
+
+	Портал стоит за краем плиты и до этого был ничем с ней не связан: между
+	кругом появления и им лежало шестьдесят стадов пустой мостовой. Крыльцо
+	заходит на плиту и потому читается её продолжением, а дорожка выложена тем
+	же светлым камнем, что и круг: одна кладка от места, где игрок появляется,
+	до места, куда он идёт.
+
+	Прямоугольники приходят готовыми из Config/Props — там же, где стоит сам
+	портал. Здесь только два тона и два слоя: кайма ниже, заливка выше,
+	ровно как у плиты с её бортом и как у круга появления.
+
+	Толщина 0.3 и никакой коллизии: кладка вделана в мостовую, а не лежит на
+	ней, и порога под ногами быть не должно.
+]]
+local function buildPortalWalk(parent: Instance): ()
+	local walk = Props.PortalWalk
+
+	local slabs = {
+		{ name = "PortalApronRim", slab = walk.apronRim, rim = true },
+		{ name = "PortalPathRim", slab = walk.pathRim, rim = true },
+		{ name = "PortalApron", slab = walk.apron, rim = false },
+		{ name = "PortalPath", slab = walk.path, rim = false },
+	}
+
+	for _, entry in slabs do
+		local part = Instance.new("Part")
+		part.Name = entry.name
+		part.Size = Vector3.new(entry.slab.size.X, 0.3, entry.slab.size.Y)
+		--[[
+			ПОРЯДОК СЛОЁВ У КРУГА ПОЯВЛЕНИЯ, СНИЗУ ВВЕРХ:
+			кайма дорожки 0.2, тёмное кольцо круга 0.26, заливка дорожки 0.32,
+			светлая середина круга 0.38. Шаг везде 0.06.
+
+			Он именно такой, а не «дорожка целиком под кругом», из-за кольца:
+			КАЙМА КРУГА ОБЯЗАНА РАЗОМКНУТЬСЯ ТАМ, ГДЕ ВХОДИТ ДОРОЖКА. Проходя
+			поверх неё, кольцо резало светлый камень тёмной дугой — дорожка
+			упиралась в бортик вместо того, чтобы втекать в круг. Заливка
+			поэтому лежит ВЫШЕ кольца (и разрывает его ровно на свою ширину),
+			но НИЖЕ середины круга — иначе она резала бы уже её.
+
+			Наложение вообще неизбежно: прямоугольник с окружностью встык
+			не сходятся, по краям ширины остаётся полумесяц голой плиты.
+			А на одной высоте лица спорят, и одинаковый цвет с материалом
+			от этого не спасают — так и было сделано, и так и не сработало:
+			у блока и у цилиндра мостовая проецируется по-разному, и перекрытие
+			читалось полосатой кашей. Поэтому спор решается только высотой:
+			кто выше — тот и рисуется.
+		]]
+		part.CFrame = entry.slab.cframe + Vector3.new(0, if entry.rim then 0.2 else 0.32, 0)
+		part.Color = if entry.rim then Palette.Lobby.plazaRim else Palette.Lobby.plazaInlay
+		part.Material = if entry.rim then Enum.Material.Slate else Enum.Material.Cobblestone
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.TopSurface = Enum.SurfaceType.Smooth
+		part.BottomSurface = Enum.SurfaceType.Smooth
+		part.Parent = parent
+	end
+end
+
 local function buildFloor(parent: Instance): ()
 	local size = Balance.Lobby.floorSize
 	local thickness = Balance.Lobby.floorThickness
@@ -164,10 +226,22 @@ local function buildFloor(parent: Instance): ()
 	plaza.CanCollide = false
 	plaza.Parent = parent
 
-	local borderHeight = Balance.Lobby.borderHeight
+	buildPortalWalk(parent)
+
 	local wallHeight = Balance.Lobby.wallHeight
 
-	-- Для каждой из четырёх сторон: видимый бортик + невидимая стена над ним.
+	--[[
+		По стороне — одна невидимая стена от самой земли.
+
+		ВИДИМОГО БОРТИКА ЗДЕСЬ БОЛЬШЕ НЕТ. Он был нужен, пока за краем поляны
+		начиналось небо: тёмная кайма хоть как-то объясняла, где кончается мир.
+		Теперь там стоит лес (LobbyForestController), край объясняет он, а трава
+		за стеной продолжается тем же цветом и той же фактурой — и кайма поперёк
+		сплошного газона осталась полосой непонятно чего.
+
+		Стена при этом обязана начинаться с нуля, а не с прежних трёх стадов:
+		бортик был не только виден, но и был телом, в которое игрок упирался.
+	]]
 	local sides: { { offset: Vector3, size: Vector3 } } = {
 		{ offset = Vector3.new(0, 0, -half), size = Vector3.new(size + 4, 1, 4) },
 		{ offset = Vector3.new(0, 0, half), size = Vector3.new(size + 4, 1, 4) },
@@ -176,20 +250,13 @@ local function buildFloor(parent: Instance): ()
 	}
 
 	for index, side in sides do
-		local border = makePart(
-			`Border{index}`,
-			Vector3.new(side.size.X, borderHeight, side.size.Z),
-			side.offset + Vector3.new(0, borderHeight / 2, 0),
-			Palette.Lobby.border,
-			parent
-		)
-		border.CanCollide = true
-
 		local wall = makePart(
 			`Wall{index}`,
 			Vector3.new(side.size.X, wallHeight, side.size.Z),
-			side.offset + Vector3.new(0, borderHeight + wallHeight / 2, 0),
-			Palette.Lobby.border,
+			side.offset + Vector3.new(0, wallHeight / 2, 0),
+			-- Цвет любой: стена прозрачна. Своей записи в палитре у неё поэтому
+			-- и нет — мёртвый цвет однажды подобрали бы для чего-нибудь ещё.
+			Palette.Lobby.grass,
 			parent
 		)
 		wall.Transparency = 1
@@ -240,12 +307,21 @@ local function buildSpawn(parent: Instance): SpawnLocation
 		Круг, вделанный в мостовую. Два кольца, а не одно пятно: внешнее
 		темнее плиты, внутреннее светлее — так круг читается выложенным,
 		а не нарисованным поверх.
+
+		ВЫСОТЫ КОЛЕЦ ЧЕРЕДУЮТСЯ С ВЫСОТАМИ ДОРОЖКИ: тёмное кольцо на 0.26 лежит
+		между её каймой (0.2) и её заливкой (0.32), а светлая середина на 0.38 —
+		выше всего. Так дорожка разрывает кольцо ровно на свою ширину и втекает
+		в круг, а не упирается в бортик. Подробности — в buildPortalWalk.
 	]]
+	-- Радиус живёт в Config/Props: от него отсчитывается начало дорожки
+	-- к порталу, и лежат они на одной высоте.
+	local diameter = Props.SpawnInlayRadius * 2
+
 	local outer = Instance.new("Part")
 	outer.Name = "SpawnInlayOuter"
 	outer.Shape = Enum.PartType.Cylinder
-	outer.Size = Vector3.new(0.3, 15, 15)
-	outer.CFrame = CFrame.new(0, 0.2, 0) * CFrame.Angles(0, 0, math.rad(90))
+	outer.Size = Vector3.new(0.3, diameter, diameter)
+	outer.CFrame = CFrame.new(0, 0.26, 0) * CFrame.Angles(0, 0, math.rad(90))
 	outer.Color = Palette.Lobby.plazaRim
 	outer.Material = Enum.Material.Slate
 	outer.Anchored = true
@@ -257,9 +333,9 @@ local function buildSpawn(parent: Instance): SpawnLocation
 	local inner = Instance.new("Part")
 	inner.Name = "SpawnInlayInner"
 	inner.Shape = Enum.PartType.Cylinder
-	inner.Size = Vector3.new(0.3, 11, 11)
-	inner.CFrame = CFrame.new(0, 0.26, 0) * CFrame.Angles(0, 0, math.rad(90))
-	inner.Color = Palette.Lobby.plaza:Lerp(Palette.UI.text, 0.25)
+	inner.Size = Vector3.new(0.3, diameter - 4, diameter - 4)
+	inner.CFrame = CFrame.new(0, 0.38, 0) * CFrame.Angles(0, 0, math.rad(90))
+	inner.Color = Palette.Lobby.plazaInlay
 	inner.Material = Enum.Material.Cobblestone
 	inner.Anchored = true
 	inner.CanCollide = false
@@ -271,60 +347,14 @@ local function buildSpawn(parent: Instance): SpawnLocation
 end
 
 --[[
-	Табличка студии. Пока Branding.logoWideAssetId == 0, вместо картинки рисуется
-	текст — выдумывать Asset ID нельзя (правило 4 ТЗ).
+	ТАБЛИЧКИ СТУДИИ НАД ПОРТАЛОМ БОЛЬШЕ НЕТ (решение владельца). Она висела
+	в тридцати стадах над землёй прямо на линии взгляда на портал и была
+	единственным объектом лобби, который ничего не делает и никуда не ведёт.
+
+	Логотип от этого никуда не делся: он показывается на экране загрузки
+	(BootController), где ему и место — там его видит каждый вошедший, а не
+	только тот, кто поднял камеру над воротами.
 ]]
-local function buildSign(parent: Instance, position: Vector3): ()
-	local board = makePart("StudioSign", Vector3.new(18, 9, 0.6), position, Palette.Lobby.sign, parent)
-	board.CanCollide = false
-
-	local surface = Instance.new("SurfaceGui")
-	surface.Name = "Display"
-	surface.Face = Enum.NormalId.Back
-	surface.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
-	surface.PixelsPerStud = 50
-	surface.LightInfluence = 0
-	surface.Parent = board
-
-	if Branding.logoWideAssetId > 0 then
-		--[[
-			Табличка под логотипом перекрашивается в светлое: сам логотип
-			нарисован тёмно-зелёным под светлый фон, и на тёмной доске
-			кольцо и слово «4pots» дали бы контраст около 2:1, то есть
-			не читались бы вовсе. Заглушке ниже светлый фон не нужен —
-			она рисуется светлым текстом и рассчитана как раз на тёмную доску.
-		]]
-		board.Color = Palette.Brand.white
-
-		local image = Instance.new("ImageLabel")
-		image.Size = UDim2.fromScale(1, 1)
-		image.BackgroundTransparency = 1
-		image.ScaleType = Enum.ScaleType.Fit
-		image.Image = `rbxassetid://{Branding.logoWideAssetId}`
-		image.Parent = surface
-		return
-	end
-
-	local title = Instance.new("TextLabel")
-	title.Size = UDim2.fromScale(1, 0.55)
-	title.Position = UDim2.fromScale(0, 0.12)
-	title.BackgroundTransparency = 1
-	title.Font = Enum.Font.GothamBold
-	title.Text = Branding.studioName
-	title.TextColor3 = Palette.UI.text
-	title.TextScaled = true
-	title.Parent = surface
-
-	local subtitle = Instance.new("TextLabel")
-	subtitle.Size = UDim2.fromScale(1, 0.25)
-	subtitle.Position = UDim2.fromScale(0, 0.62)
-	subtitle.BackgroundTransparency = 1
-	subtitle.Font = Enum.Font.Gotham
-	subtitle.Text = Branding.studioSuffix
-	subtitle.TextColor3 = Palette.UI.subtext
-	subtitle.TextScaled = true
-	subtitle.Parent = surface
-end
 
 --[[
 	Заглушка портала: площадка, две неоновые стойки и перекладина.
@@ -406,7 +436,6 @@ function LobbyService.Init(): ()
 
 	buildFloor(folder)
 	spawnLocation = buildSpawn(folder)
-	buildSign(folder, Vector3.new(0, 30, -Balance.Lobby.plazaRadius - 1))
 	buildAnchors(folder)
 
 	lobbyFolder = folder
