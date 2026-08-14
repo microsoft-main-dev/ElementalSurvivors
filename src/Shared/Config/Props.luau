@@ -258,11 +258,18 @@ local definitions: { ModelDef } = {
 				Сама поверхность и её ядро. Полупрозрачны обе, и дышат в
 				разном темпе: именно рассинхрон двух слоёв читается как
 				«там что-то есть», а один слой — как крашеная доска.
+
+				ПОВЕРХНОСТЬ ОБЯЗАНА ДОХОДИТЬ ДО ПЕРЕКЛАДИНЫ. Колонны кончаются
+				на восемнадцати, перекладина начинается на 19.2, и поверхность
+				высотой 17 оставляла между ними щель во всю ширину арки —
+				сквозь неё было видно небо, и ворота читались недостроенными.
+				Верх теперь заходит ПОД перекладину, а низ — на ступень:
+				стык двух граней в ноль это просвет при первой же правке.
 			]]
 			{
 				shape = "Block",
-				size = Vector3.new(14.4, 17, 0.6),
-				offset = Vector3.new(0, 9.5, 0),
+				size = Vector3.new(14.4, 19.4, 0.6),
+				offset = Vector3.new(0, 10, 0),
 				color = "portal",
 				neon = true,
 				transparency = 0.35,
@@ -272,8 +279,8 @@ local definitions: { ModelDef } = {
 			},
 			{
 				shape = "Block",
-				size = Vector3.new(10, 13, 0.4),
-				offset = Vector3.new(0, 9.2, -0.3),
+				size = Vector3.new(10, 14, 0.4),
+				offset = Vector3.new(0, 9.8, -0.3),
 				color = "portalGlow",
 				neon = true,
 				transparency = 0.55,
@@ -902,6 +909,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(0, 4.5, 0),
 				angles = Vector3.new(0, 0, 90),
 				color = "wood",
+				material = Enum.Material.Wood,
 			},
 			{
 				shape = "Block",
@@ -909,6 +917,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(-0.8, 10, 0.4),
 				angles = Vector3.new(0, 18, 0),
 				color = "leaf",
+				material = Enum.Material.LeafyGrass,
 			},
 			{
 				shape = "Block",
@@ -916,6 +925,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(2.2, 11.6, -1),
 				angles = Vector3.new(0, -25, 0),
 				color = "leafDark",
+				material = Enum.Material.LeafyGrass,
 			},
 			{
 				shape = "Block",
@@ -923,6 +933,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(-1.4, 13.4, -0.6),
 				angles = Vector3.new(0, 40, 0),
 				color = "leaf",
+				material = Enum.Material.LeafyGrass,
 			},
 		},
 		footprint = 0,
@@ -937,6 +948,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(0, 5.5, 0),
 				angles = Vector3.new(0, 0, 90),
 				color = "wood",
+				material = Enum.Material.Wood,
 			},
 			{
 				shape = "Block",
@@ -944,6 +956,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(1.2, 11.4, 0),
 				angles = Vector3.new(0, -14, 0),
 				color = "leafDark",
+				material = Enum.Material.LeafyGrass,
 			},
 			{
 				shape = "Block",
@@ -951,6 +964,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(-1.8, 12.8, 0.8),
 				angles = Vector3.new(0, 30, 0),
 				color = "leaf",
+				material = Enum.Material.LeafyGrass,
 			},
 			{
 				shape = "Block",
@@ -958,6 +972,7 @@ local definitions: { ModelDef } = {
 				offset = Vector3.new(0.6, 14.8, -0.8),
 				angles = Vector3.new(0, -38, 0),
 				color = "leafDark",
+				material = Enum.Material.LeafyGrass,
 			},
 		},
 		footprint = 0,
@@ -1047,6 +1062,15 @@ local EGG_WIDTH = 4
 	и узор на скорлупе не съезжает.
 ]]
 local EGG_TOP_TRIM = 1
+
+--[[
+	Центр ореола сияющего яйца: примерно середина скорлупы.
+
+	Это же — ось, вокруг которой ходят по вертикальному кругу верхний и нижний
+	лучи. Одно число на всё: разъедься ореол с осью лучей, и они начали бы
+	вылетать из него боком.
+]]
+local EGG_AURA_Y = 2.6
 
 --[[
 	Профиль яйца: доля от половины ширины на высоте t (0 — низ, 1 — верх).
@@ -1229,28 +1253,74 @@ local function eggParts(key: string, color: Color3, premium: boolean): { ModelPa
 			})
 		end
 	elseif key == "Radiant" then
-		-- Ореол и лучи. Ореол дышит прозрачностью, лучи стоят: мигающие
-		-- лучи читались бы аварийной сигнализацией.
+		-- Ореол дышит прозрачностью: мигающий ореол читался бы аварийной
+		-- сигнализацией, а медленно светлеющий — сиянием.
 		table.insert(parts, {
 			shape = "Ball",
 			size = Vector3.new(6.8, 6.8, 6.8),
-			offset = Vector3.new(0, 2.6, 0),
+			offset = Vector3.new(0, EGG_AURA_Y, 0),
 			color = "eggAura",
 			neon = true,
 			transparency = 0.72,
 			anim = "glow",
-			animSpeed = 0.25,
 			animAmount = 0.12,
+			animSpeed = 0.25,
 		})
-		for _, degrees in { 0, 62, -62, 108, -108 } do
-			local angle = math.rad(degrees)
+
+		--[[
+			Лучи облетают яйцо вразнобой — решение владельца, тем же каналом
+			spin, что и осколки кристаллического яйца.
+
+			Каждый луч висит в СВОЕЙ вертикальной плоскости (поворот yaw) и
+			идёт со своей скоростью, часть — в обратную сторону. Одинаковая
+			скорость превратила бы их в жёсткую корону, вращающуюся целиком:
+			именно рассинхрон читается как «сияние живое». Разные высоты
+			и вылеты нужны затем же — лучи на одной высоте складываются
+			в кольцо, сколько бы их ни было.
+
+			Наклон задаётся ДО разворота: CFrame.Angles(0, yaw, -tilt) — это
+			Ry * Rz, то есть луч сначала ложится радиально в плоскости XY,
+			а потом вся плоскость поворачивается вокруг вертикали. В обратном
+			порядке он уезжал бы вбок от собственного направления.
+		]]
+		--[[
+			ЛУЧ НА САМОЙ ОСИ SPIN-ом НЕ ДВИГАЕТСЯ. Верхний и нижний стоят ровно
+			над центром и под ним, то есть на оси вращения: spin крутил бы их
+			вокруг себя, а тонкая палка вокруг себя выглядит неподвижной. Им
+			дан tumble — тот же облёт, но по вертикальному кругу, через макушку
+			и под низом. Ось круга проходит через центр ореола (animPivotY),
+			а не через дно яйца, иначе луч уходил бы под тумбу.
+		]]
+		local rays = {
+			{ tilt = 0, yaw = 0, reach = 3.7, speed = 0.09, vertical = true },
+			{ tilt = 180, yaw = 90, reach = 3.5, speed = -0.13, vertical = true },
+			{ tilt = 58, yaw = 35, reach = 3.9, speed = -0.11, vertical = false },
+			{ tilt = -58, yaw = 70, reach = 3.6, speed = 0.15, vertical = false },
+			{ tilt = 104, yaw = 120, reach = 3.4, speed = -0.06, vertical = false },
+			{ tilt = -104, yaw = 200, reach = 3.8, speed = 0.12, vertical = false },
+		}
+
+		for _, ray in rays do
+			local tilt = math.rad(ray.tilt)
+			local yaw = math.rad(ray.yaw)
+			local out = math.sin(tilt) * ray.reach
+
 			table.insert(parts, {
 				shape = "Block",
 				size = Vector3.new(0.45, 2.6, 0.45),
-				offset = Vector3.new(math.sin(angle) * 3.7, 2.6 + math.cos(angle) * 3.7, 0),
-				angles = Vector3.new(0, 0, -degrees),
+				offset = Vector3.new(
+					out * math.cos(yaw),
+					EGG_AURA_Y + math.cos(tilt) * ray.reach,
+					-out * math.sin(yaw)
+				),
+				angles = Vector3.new(0, ray.yaw, -ray.tilt),
 				color = "eggAura",
 				neon = true,
+				anim = if ray.vertical then "tumble" else "spin",
+				animSpeed = ray.speed,
+				-- Точка подвеса нужна только вертикальному кругу; spin крутится
+				-- вокруг оси модели и о ней не спрашивает.
+				animPivotY = if ray.vertical then EGG_AURA_Y else nil,
 			})
 		end
 	end
@@ -1483,15 +1553,24 @@ for index, head in FLOWER_HEADS do
 		parts = {
 			{
 				shape = "Cylinder",
-				size = Vector3.new(1.1, 0.14, 0.14),
-				offset = Vector3.new(0, 0.55, 0),
+				size = Vector3.new(1.4, 0.2, 0.2),
+				offset = Vector3.new(0, 0.7, 0),
 				angles = Vector3.new(0, 0, 90),
 				paint = Palette.Detail.leaf,
+				material = Enum.Material.Grass,
 			},
+			--[[
+				Головка — повёрнутая плашка, а не шарик (решение владельца
+				по цветам арены, Config/ArenaProps). Шар с любого ракурса
+				остаётся кружком, а плоский лепесток ловит свет по-разному
+				в зависимости от того, как цветок развёрнут, — и поляна
+				из полусотни одинаковых цветов перестаёт быть однородной.
+			]]
 			{
-				shape = "Ball",
-				size = Vector3.new(0.7, 0.45, 0.7),
-				offset = Vector3.new(0, 1.15, 0),
+				shape = "Block",
+				size = Vector3.new(0.8, 0.25, 0.8),
+				offset = Vector3.new(0, 1.4, 0),
+				angles = Vector3.new(0, 30, 0),
 				color = head,
 			},
 		},
@@ -1528,6 +1607,16 @@ local function facingCentre(x: number, z: number): number
 	return math.deg(math.atan2(x, z))
 end
 
+--[[
+	Половина тумбы яйца плюс запас до края плиты.
+
+	Ряд яиц — единственное, что стоит поперёк круга, а не смотрит в центр,
+	поэтому за край он вылезает первым: угловое яйцо уходит от центра дальше,
+	чем говорит его z. Числа отсюда идут в расчёт ряда ниже.
+]]
+local EGG_STAND_HALF = 4
+local EGG_MARGIN = 2
+
 local LAYOUT = {
 	portal = Vector3.new(0, 0, -PLAZA - 1),
 	leaderboard = Vector3.new(-PLAZA * 0.71, 0, 0),
@@ -1535,9 +1624,34 @@ local LAYOUT = {
 	shop = Vector3.new(-PLAZA * 0.62, 0, PLAZA * 0.55),
 	wheel = Vector3.new(PLAZA * 0.62, 0, PLAZA * 0.55),
 	petStand = Vector3.new(0, 0, PLAZA * 0.37),
-	eggRow = PLAZA * 0.86,
+	-- Проставляется ниже: ряд считается от числа яиц, а не подбирается долей.
+	eggRow = 0,
 	eggSpacing = 16,
 }
+
+--[[
+	Насколько ряд яиц отодвинут от центра.
+
+	СЧИТАЕТСЯ, А НЕ ЗАДАЁТСЯ ДОЛЕЙ. Доля 0.86 подходила ровно к пяти яйцам,
+	да и то не подошла: крайние тумбы свешивались с плиты углом, потому что
+	от центра до УГЛА тумбы дальше, чем до её середины. Шестое яйцо
+	вылезло бы ещё сильнее, и заметил бы это опять владелец, а не код.
+
+	Условие простое: самый дальний угол крайней тумбы обязан остаться внутри
+	круга площади с запасом. Отсюда и z.
+]]
+local eggHalfSpan = (#Eggs.List - 1) * LAYOUT.eggSpacing * 0.5
+local eggEdge = eggHalfSpan + EGG_STAND_HALF
+local eggLimit = PLAZA - EGG_MARGIN
+
+assert(
+	eggEdge < eggLimit,
+	`[Props] Ряд из {#Eggs.List} яиц шире площади: нужен радиус больше {math.ceil(
+		eggEdge + EGG_MARGIN
+	)}`
+)
+
+LAYOUT.eggRow = math.sqrt(eggLimit * eggLimit - eggEdge * eggEdge) - EGG_STAND_HALF
 
 --[[
 	Точка, где клиент ставит модель питомца на стенде. Экспортируется, потому
@@ -1662,15 +1776,97 @@ for index = 1, 54 do
 	})
 end
 
--- Фонари по краю площади: свет там, где игрок ходит между объектами.
-for index = 1, 6 do
-	local angle = math.rad((index - 1) * 60 + 30)
+--[[
+	ФОНАРИ СТАВЯТСЯ ТУДА, ГДЕ НИЧЕГО НЕ ЗАСЛОНЯЮТ.
+
+	Раньше они стояли строго через 60 градусов, и один из них вставал ровно
+	перед крайним яйцом: подойти к нему было можно, а увидеть — нет.
+
+	Правило общее и держится на данных: фонарь не имеет права занимать
+	НАПРАВЛЕНИЕ, в котором с площади виден любой объект взаимодействия.
+	Смотрят на объекты от центра площади (там игрок появляется и туда же
+	возвращается), поэтому и сравниваются углы, а не расстояния: фонарь,
+	отстоящий от яйца на десять стадов вбок, всё равно закрывает его,
+	если стоит на той же линии взгляда.
+
+	Занятые направления берутся из тех же точек, которыми стоят сами объекты,
+	то есть двигать что-либо в LAYOUT можно свободно: фонари переставятся сами.
+	Декор ОСТАЁТСЯ ДЕКОРОМ — это правило, а не разовая правка координат.
+]]
+local LAMP_COUNT = 6
+local LAMP_RADIUS = PLAZA - 5
+local LAMP_CLEAR_DEGREES = 18 -- насколько фонарь обязан отстоять от чужого направления
+local LAMP_SPREAD_DEGREES = 30 -- и друг от друга, иначе они собьются в кучу
+
+local occupiedAngles: { number } = {}
+
+local function markOccupied(x: number, z: number): ()
+	table.insert(occupiedAngles, math.deg(math.atan2(x, z)) % 360)
+end
+
+for _, point in { LAYOUT.portal, LAYOUT.leaderboard, LAYOUT.quests, LAYOUT.shop, LAYOUT.wheel, LAYOUT.petStand } do
+	markOccupied(point.X, point.Z)
+end
+
+for index = 1, #Eggs.List do
+	markOccupied(eggStart + (index - 1) * LAYOUT.eggSpacing, LAYOUT.eggRow)
+end
+
+-- Кратчайший угол между направлениями: 350 и 10 отстоят на двадцать градусов,
+-- а не на триста сорок.
+local function angleGap(a: number, b: number): number
+	local diff = math.abs((a - b) % 360)
+	return math.min(diff, 360 - diff)
+end
+
+local lampAngles: { number } = {}
+
+for candidate = 0, 359, 5 do
+	if #lampAngles >= LAMP_COUNT then
+		break
+	end
+
+	local free = true
+
+	for _, taken in occupiedAngles do
+		if angleGap(candidate, taken) < LAMP_CLEAR_DEGREES then
+			free = false
+			break
+		end
+	end
+
+	if free then
+		for _, lamp in lampAngles do
+			if angleGap(candidate, lamp) < LAMP_SPREAD_DEGREES then
+				free = false
+				break
+			end
+		end
+	end
+
+	if free then
+		table.insert(lampAngles, candidate)
+	end
+end
+
+for _, degrees in lampAngles do
+	local angle = math.rad(degrees)
 	table.insert(placements, {
 		key = "Lamp",
-		position = Vector3.new(math.sin(angle) * (PLAZA - 5), 0, math.cos(angle) * (PLAZA - 5)),
+		position = Vector3.new(math.sin(angle) * LAMP_RADIUS, 0, math.cos(angle) * LAMP_RADIUS),
 		yaw = 0,
 	})
 end
+
+--[[
+	Проверка, а не надежда: если однажды объектов станет столько, что свободных
+	направлений не останется, лобби окажется без света — и узнать об этом
+	лучше при загрузке, чем по жалобе на тёмную площадь.
+]]
+assert(
+	#lampAngles >= 3,
+	`[Props] Фонарям не осталось места: свободных направлений {#lampAngles} из {LAMP_COUNT}`
+)
 
 --[[
 	Объёмы, в которые игрок упирается и на которых висят промпты.

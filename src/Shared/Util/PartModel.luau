@@ -227,7 +227,12 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance, allowFx:
 		part.Shape = SHAPES[partDef.shape] or Enum.PartType.Block
 		part.Size = partDef.size
 		part.Color = colorOf(tints, partDef)
-		part.Material = if partDef.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		--[[
+			Неон важнее заданного материала: он не фактура, а способ свечения,
+			и деталь, у которой стоит и то и другое, обязана светиться —
+			иначе светящаяся вещь молча погасла бы от правки фактуры.
+		]]
+		part.Material = if partDef.neon then Enum.Material.Neon else partDef.material or Enum.Material.SmoothPlastic
 		-- Собранная модель невидима: её показывают на спавне босса, а до
 		-- того она обязана не висеть посреди арены.
 		part.Transparency = 1
@@ -446,6 +451,22 @@ function PartModel.Build(def: ModelDef, tints: Tints, parent: Instance, allowFx:
 				-- Поворот слева: деталь облетает ось модели, а не крутится
 				-- вокруг себя. На шаре вращение вокруг себя не видно вовсе.
 				cf = CFrame.Angles(0, elapsed * (entry.def.animSpeed or 1) * math.pi * 2, 0) * cf
+			elseif anim == "tumble" then
+				--[[
+					Вертикальный круг: то же облетание, но вокруг горизонтальной
+					оси. Нужен деталям, стоящим НА оси модели: их spin оставляет
+					на месте, потому что вокруг своей оси они и крутятся.
+
+					Ось проходит через animPivotY той же конструкцией, что у step
+					(перенос — поворот — перенос обратно). Без неё круг считался
+					бы от пола модели, и деталь над ней уходила бы под землю.
+				]]
+				local hip = entry.hip
+				local hipInverse = entry.hipInverse
+				if hip and hipInverse then
+					local turn = elapsed * (entry.def.animSpeed or 1) * math.pi * 2
+					cf = hip * CFrame.Angles(turn, 0, 0) * hipInverse * cf
+				end
 			elseif anim == "bob" then
 				local rate = entry.def.animSpeed or 1
 				local amount = entry.def.animAmount or 0

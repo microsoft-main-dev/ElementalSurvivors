@@ -111,14 +111,22 @@ local function buildFloor(parent: Instance): ()
 	local thickness = Balance.Lobby.floorThickness
 	local half = size / 2
 
-	-- Поляна: верхняя грань ровно на y = 0.
-	makePart(
+	--[[
+		Поляна: верхняя грань ровно на y = 0.
+
+		Материал тот же, что у пола Лесной поляны на арене (Config/Biomes):
+		лобби и первая локация — один и тот же лес, и разная фактура травы
+		читалась бы как два разных мира. Встроенный материал движка ассетом
+		не является, правило 4 его не касается.
+	]]
+	local meadow = makePart(
 		"Meadow",
 		Vector3.new(size, thickness, size),
 		Vector3.new(0, -thickness / 2, 0),
 		Palette.Lobby.grass,
 		parent
 	)
+	meadow.Material = Enum.Material.LeafyGrass
 
 	--[[
 		Мощёная площадь посреди поляны (планировка владельца). Два круга:
@@ -128,6 +136,11 @@ local function buildFloor(parent: Instance): ()
 		Лежат чуть выше пола и без коллизии: игрок ходит по поляне, а плита
 		только рисуется. Толщина у неё нулевая по смыслу, поэтому и ступеньки
 		на краю не возникает.
+
+		ФАКТУРА. Сама плита — Cobblestone: мостовая, то есть ровно то, чем
+		площадь и должна быть. Кайма — Slate, крупная и ровная: одна и та же
+		мостовая на обоих кругах слила бы борт с плитой, а борт здесь и есть
+		единственное, что отделяет площадь от травы.
 	]]
 	local rim = Instance.new("Part")
 	rim.Name = "PlazaRim"
@@ -135,7 +148,7 @@ local function buildFloor(parent: Instance): ()
 	rim.Size = Vector3.new(0.3, Balance.Lobby.plazaRadius * 2 + 5, Balance.Lobby.plazaRadius * 2 + 5)
 	rim.CFrame = CFrame.new(0, 0.06, 0) * CFrame.Angles(0, 0, math.rad(90))
 	rim.Color = Palette.Lobby.plazaRim
-	rim.Material = Enum.Material.SmoothPlastic
+	rim.Material = Enum.Material.Slate
 	rim.Anchored = true
 	rim.CanCollide = false
 	rim.Parent = parent
@@ -146,7 +159,7 @@ local function buildFloor(parent: Instance): ()
 	plaza.Size = Vector3.new(0.3, Balance.Lobby.plazaRadius * 2, Balance.Lobby.plazaRadius * 2)
 	plaza.CFrame = CFrame.new(0, 0.14, 0) * CFrame.Angles(0, 0, math.rad(90))
 	plaza.Color = Palette.Lobby.plaza
-	plaza.Material = Enum.Material.SmoothPlastic
+	plaza.Material = Enum.Material.Cobblestone
 	plaza.Anchored = true
 	plaza.CanCollide = false
 	plaza.Parent = parent
@@ -186,20 +199,74 @@ local function buildFloor(parent: Instance): ()
 	end
 end
 
+--[[
+	Точка появления игрока.
+
+	САМА ПЛОЩАДКА НЕВИДИМА. Неоновый квадрат посреди мостовой читался наклейкой:
+	он и раньше был чужеродным, а с фактурой плиты стал вычурным. Место
+	появления показывает не он, а вделанный в плиту круг — тех же камней,
+	что и площадь, только светлее.
+
+	ПОВОРОТ НА 180. Персонаж появляется лицом туда, куда смотрит площадка,
+	а смотрела она на портал — то есть игрок каждый раз начинал спиной ко всему,
+	ради чего в лобби заходят: к лавке, яйцам, колесу и стендам. Портал
+	за спиной, и это правильно: к нему идут сознательно, а витрины должны
+	попадаться на глаза сами.
+
+	Развернуть саму планировку было бы тем же самым с точки зрения игрока,
+	но подвинуло бы каждую точку, промпт и объём в Config/Props.
+]]
 local function buildSpawn(parent: Instance): SpawnLocation
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "LobbySpawn"
 	spawn.Size = Vector3.new(12, 1, 12)
-	spawn.Position = Vector3.new(0, 0.5, 0)
-	spawn.Color = Palette.Lobby.portal
-	spawn.Material = Enum.Material.Neon
+	-- Верх заподлицо с плитой: приподнятая площадка давала ступеньку под ногами.
+	spawn.CFrame = CFrame.new(0, -0.5, 0) * CFrame.Angles(0, math.pi, 0)
+	spawn.Transparency = 1
 	spawn.Anchored = true
-	spawn.CanCollide = true
+	--[[
+		Коллизии нет: игрок стоит на поляне, а площадка теперь утоплена в неё.
+		С коллизией она была бы невидимым порогом ровно там, где игрок
+		появляется.
+	]]
+	spawn.CanCollide = false
 	spawn.Neutral = true
 	spawn.Duration = 0
 	spawn.TopSurface = Enum.SurfaceType.Smooth
 	spawn.BottomSurface = Enum.SurfaceType.Smooth
 	spawn.Parent = parent
+
+	--[[
+		Круг, вделанный в мостовую. Два кольца, а не одно пятно: внешнее
+		темнее плиты, внутреннее светлее — так круг читается выложенным,
+		а не нарисованным поверх.
+	]]
+	local outer = Instance.new("Part")
+	outer.Name = "SpawnInlayOuter"
+	outer.Shape = Enum.PartType.Cylinder
+	outer.Size = Vector3.new(0.3, 15, 15)
+	outer.CFrame = CFrame.new(0, 0.2, 0) * CFrame.Angles(0, 0, math.rad(90))
+	outer.Color = Palette.Lobby.plazaRim
+	outer.Material = Enum.Material.Slate
+	outer.Anchored = true
+	outer.CanCollide = false
+	outer.CanQuery = false
+	outer.CanTouch = false
+	outer.Parent = parent
+
+	local inner = Instance.new("Part")
+	inner.Name = "SpawnInlayInner"
+	inner.Shape = Enum.PartType.Cylinder
+	inner.Size = Vector3.new(0.3, 11, 11)
+	inner.CFrame = CFrame.new(0, 0.26, 0) * CFrame.Angles(0, 0, math.rad(90))
+	inner.Color = Palette.Lobby.plaza:Lerp(Palette.UI.text, 0.25)
+	inner.Material = Enum.Material.Cobblestone
+	inner.Anchored = true
+	inner.CanCollide = false
+	inner.CanQuery = false
+	inner.CanTouch = false
+	inner.Parent = parent
+
 	return spawn
 end
 
@@ -354,10 +421,16 @@ function LobbyService.Start(): ()
 	)
 end
 
+--[[
+	Куда ставить персонажа, если это делает код, а не сам SpawnLocation.
+
+	Приподнято над площадкой: сама она утоплена в плиту заподлицо, и её
+	собственный CFrame поставил бы персонажа ногами в пол.
+]]
 function LobbyService.GetSpawnCFrame(): CFrame
 	local spawn = spawnLocation
 	if spawn then
-		return spawn.CFrame
+		return spawn.CFrame + Vector3.new(0, 3, 0)
 	end
 	return CFrame.new(0, Balance.Lobby.floorThickness, 0)
 end
