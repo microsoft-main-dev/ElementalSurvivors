@@ -34,19 +34,6 @@ local screen: ScreenGui? = nil
 local essenceLabel: TextLabel? = nil
 local prismsLabel: TextLabel? = nil
 
--- 12345 -> "12 345": длинные числа без разделителя читаются как каша.
-local function formatAmount(value: number): string
-	local text = tostring(math.floor(value))
-	local result = text
-	local count: number
-
-	repeat
-		result, count = string.gsub(result, "^(-?%d+)(%d%d%d)", "%1 %2")
-	until count == 0
-
-	return result
-end
-
 local function makePill(parent: Instance, order: number, color: Color3, kind: Types.CurrencyKind): TextLabel
 	local pill = Instance.new("Frame")
 	pill.Name = `Pill{order}`
@@ -93,17 +80,28 @@ local function makePill(parent: Instance, order: number, color: Color3, kind: Ty
 		dotCorner.Parent = dot
 	end
 
+	--[[
+		Число стоит ПО ЦЕНТРУ свободного места справа от значка, а не жмётся
+		к правому краю. Прижатое к краю, оно упиралось в фаску рамки, и на
+		коротком числе плашка выглядела наполовину пустой: значок слева,
+		число у самого борта, дыра посередине.
+
+		Ширина считается от значка и отступов, а не подбирается: значок стоит
+		в шести пикселях и занимает двадцать, справа оставляем столько же.
+	]]
+	local textLeft = 6 + 20 + 4
+
 	local label = Instance.new("TextLabel")
 	label.Name = "Amount"
-	label.AnchorPoint = Vector2.new(1, 0.5)
-	label.Position = UDim2.new(1, -10, 0.5, 0)
-	label.Size = UDim2.new(1, -32, 1, 0)
+	label.AnchorPoint = Vector2.new(0, 0.5)
+	label.Position = UDim2.new(0, textLeft, 0.5, 0)
+	label.Size = UDim2.new(1, -(textLeft + 10), 1, 0)
 	label.BackgroundTransparency = 1
 	label.Font = Enum.Font.GothamBold
 	label.Text = "0"
 	label.TextColor3 = Palette.UI.text
 	label.TextSize = 16
-	label.TextXAlignment = Enum.TextXAlignment.Right
+	label.TextXAlignment = Enum.TextXAlignment.Center
 	label.Parent = pill
 
 	return label
@@ -145,15 +143,20 @@ local function setVisible(visible: boolean): ()
 	end
 end
 
+--[[
+	Числа компактные с миллиона: плашка узкая, а Essence поздней игры считается
+	миллионами и миллиардами. До миллиона формат прежний, с разделителем —
+	«67 507» читается с одного взгляда, а «67.5K» пришлось бы расшифровывать.
+]]
 local function apply(view: Types.ProfileView): ()
 	local essence = essenceLabel
 	if essence then
-		essence.Text = formatAmount(view.essence)
+		essence.Text = UiKit.FormatShort(view.essence)
 	end
 
 	local prisms = prismsLabel
 	if prisms then
-		prisms.Text = formatAmount(view.prisms)
+		prisms.Text = UiKit.FormatShort(view.prisms)
 	end
 end
 

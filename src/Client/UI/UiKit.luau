@@ -213,6 +213,37 @@ function UiKit.Button(parent: Instance, name: string, text: string, color: Color
 		button:GetPropertyChangedSignal("Text"):Connect(function()
 			label.Text = button.Text
 		end)
+
+		--[[
+			ПРОЗРАЧНОСТЬ ЗЕРКАЛИТСЯ ТАК ЖЕ, КАК ТЕКСТ, И ТУТ ЖЕ ГАСИТСЯ ОБРАТНО.
+
+			Собственная подпись кнопки со скином обязана оставаться невидимой
+			ВСЕГДА: её рисует ярлык. Но снаружи прозрачность пишут в трёх
+			местах (SetEnabled, Chip, вкладки) — и каждое из них проявляло
+			родной текст поверх ярлыка. На кнопке без значка две копии ложились
+			ровно друг на друга и выглядели просто жирнее; на кнопке со значком
+			ярлык сдвинут вправо, и надпись двоилась — «1.5M» поверх «1.5M»
+			читалось нечитаемой кашей из цифр.
+
+			СОБСТВЕННАЯ ЗАПИСЬ ОТСЕКАЕТСЯ ЗНАЧЕНИЕМ, А НЕ ЗАМКОМ. Сигналы
+			свойств в Roblox отложенные: обработчик выполняется не в момент
+			присвоения, а на ближайшей точке возобновления, — и флаг «сейчас
+			пишу сам» к тому времени уже снят. Единица, которой мы гасим родной
+			текст, возвращалась в обработчик как чужая и уезжала в ярлык:
+			подпись пропадала с кнопки целиком. Проверка «меньше единицы»
+			от порядка выполнения не зависит вовсе.
+
+			Полная непрозрачность снаружи при этом игнорируется — и это
+			правильно: погасить подпись через кнопку никто не пытается,
+			а те, кто гасит интерфейс совсем (экран загрузки), идут по всем
+			потомкам и достают ярлык напрямую.
+		]]
+		button:GetPropertyChangedSignal("TextTransparency"):Connect(function()
+			if button.TextTransparency < 1 then
+				label.TextTransparency = button.TextTransparency
+				button.TextTransparency = 1
+			end
+		end)
 		button:GetPropertyChangedSignal("TextSize"):Connect(function()
 			label.TextSize = button.TextSize
 		end)
@@ -350,6 +381,25 @@ function UiKit.HasSkin(key: string): boolean
 end
 
 --[[
+	Сколько пикселей занимает НАРИСОВАННАЯ рамка скина с каждой стороны.
+
+	Это и есть та полоса, в которую содержимому заезжать нельзя. Считается,
+	а не записывается второй раз руками: угол 9-slice рисуется в натуральную
+	величину, ужатую SliceScale, — то есть ровно inset * scale. Разъехаться
+	с самой нарезкой это число не может по построению.
+
+	Без скина ноль: тогда рамки нет вовсе, и отступ содержимому даёт вызывающий
+	по своим прежним числам.
+]]
+function UiKit.SkinInset(key: string): number
+	local part = SKIN[key]
+	if not part or not UiKit.HasSkin(key) then
+		return 0
+	end
+	return math.round(part.inset * part.scale)
+end
+
+--[[
 	Значок внутри кнопки.
 
 	С подписью значок встаёт слева, а текст отодвигается вправо ровно на его
@@ -411,6 +461,11 @@ end
 	ошибка интерфейса, а погашенная — как «пока нельзя», и объясняет сама себя.
 ]]
 function UiKit.SetEnabled(button: TextButton, enabled: boolean): ()
+	--[[
+		У кнопки со скином эта запись уезжает в ярлык и тут же гасится обратно
+		(зеркало в UiKit.Button): собственная подпись такой кнопки обязана
+		оставаться невидимой, иначе она рисуется поверх ярлыка вторым слоем.
+	]]
 	button.TextTransparency = if enabled then 0 else 0.5
 	button.Active = enabled
 
@@ -580,9 +635,23 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	uiScale.Parent = panel
 	watchViewport(uiScale)
 
+	--[[
+		Отступ содержимого от края окна.
+
+		Считается от нарисованной рамки, а не берётся числом: у скина окна
+		фаска в 22 пикселя, и прежние двенадцать заводили заголовок, вкладки
+		и кнопки ПОД неё — надписи наезжали на борт по всему интерфейсу.
+
+		Максимум с двенадцатью нужен для случая «скина нет»: тогда рамки нет
+		вовсе, но прижимать содержимое вплотную к краю всё равно нельзя.
+	]]
+	local inset = math.max(UiKit.SkinInset("FrameWindow"), 12)
+	local headerHeight = 56
+	local headerGap = 8
+
 	local header = UiKit.Frame(panel, "Header")
-	header.Size = UDim2.new(1, -24, 0, 56)
-	header.Position = UDim2.fromOffset(12, 8)
+	header.Size = UDim2.new(1, -inset * 2, 0, headerHeight)
+	header.Position = UDim2.fromOffset(inset, inset)
 
 	local title = UiKit.Label(header, "Title", titleText, 24)
 	title.Font = Enum.Font.GothamBold
@@ -607,8 +676,8 @@ function UiKit.Window(parent: Instance, name: string, titleText: string): Window
 	end)
 
 	local content = UiKit.Frame(panel, "Content")
-	content.Position = UDim2.fromOffset(12, 72)
-	content.Size = UDim2.new(1, -24, 1, -84)
+	content.Position = UDim2.fromOffset(inset, inset + headerHeight + headerGap)
+	content.Size = UDim2.new(1, -inset * 2, 1, -(inset * 2 + headerHeight + headerGap))
 
 	return { screen = screen, panel = panel, content = content, title = title, subtitle = subtitle }
 end
@@ -634,10 +703,16 @@ function UiKit.Row(parent: Instance, order: number, accent: Color3): Row
 	UiKit.Corners(frame, 8)
 	UiKit.Skin(frame, "FrameRow")
 
+	--[[
+		Тот же отступ от рамки, что у окна, только у строки фаска тоньше.
+		Метка, поставленная в восьми пикселях, наезжала на неё углом.
+	]]
+	local inset = math.max(UiKit.SkinInset("FrameRow"), 8)
+
 	local badge = Instance.new("TextLabel")
 	badge.Name = "Badge"
 	badge.AnchorPoint = Vector2.new(0, 0.5)
-	badge.Position = UDim2.new(0, 8, 0.5, 0)
+	badge.Position = UDim2.new(0, inset, 0.5, 0)
 	badge.Size = UDim2.fromOffset(44, 44)
 	badge.BackgroundColor3 = accent
 	badge.BorderSizePixel = 0
@@ -648,18 +723,26 @@ function UiKit.Row(parent: Instance, order: number, accent: Color3): Row
 	badge.Parent = frame
 	UiKit.Corners(badge, 8)
 
+	--[[
+		Текст начинается за меткой, а место под кнопки вычитается из ширины
+		целиком: 176 самих кнопок, отступ до них и обе фаски. Считать это
+		числом «250» было верно ровно до появления рамки.
+	]]
+	local textLeft = inset + 54
+	local textWidth = -(textLeft + 176 + 12 + inset)
+
 	local title = UiKit.Label(frame, "Title", "", 17)
 	title.Font = Enum.Font.GothamBold
-	title.Position = UDim2.fromOffset(62, 10)
-	title.Size = UDim2.new(1, -250, 0, 22)
+	title.Position = UDim2.fromOffset(textLeft, 10)
+	title.Size = UDim2.new(1, textWidth, 0, 22)
 
 	local subtitle = UiKit.Label(frame, "Subtitle", "", 13, Palette.UI.subtext)
-	subtitle.Position = UDim2.fromOffset(62, 32)
-	subtitle.Size = UDim2.new(1, -250, 0, 20)
+	subtitle.Position = UDim2.fromOffset(textLeft, 32)
+	subtitle.Size = UDim2.new(1, textWidth, 0, 20)
 
 	local actions = UiKit.Frame(frame, "Actions")
 	actions.AnchorPoint = Vector2.new(1, 0.5)
-	actions.Position = UDim2.new(1, -8, 0.5, 0)
+	actions.Position = UDim2.new(1, -inset, 0.5, 0)
 	actions.Size = UDim2.fromOffset(176, UiKit.ButtonHeight)
 
 	local layout = Instance.new("UIListLayout")
@@ -855,6 +938,45 @@ function UiKit.Tabs(parent: Instance, names: { string }, onSelect: (name: string
 
 	paint()
 	return tabs
+end
+
+--[[
+	Компактная запись больших чисел: 1 200 000 -> "1.2M".
+
+	Нужна там, где число живёт в узком месте — на кнопке, в плашке валюты, на
+	шкале. Экономика поздней игры оперирует миллиардами (полный путь SSS-питомца
+	стоит пятнадцать миллионов, а цена уровня растёт в 87 раз), и десятизначное
+	число не помещается никуда: оно либо вылезает за рамку, либо наезжает
+	на соседний ярлык.
+
+	Точность до одного знака и НЕ округляется вверх: показанное «1.2M» должно
+	означать, что денег хватит, если их 1.2M, — а не наоборот.
+
+	Ниже миллиона формат не меняется вовсе: 67 507 читается с одного взгляда,
+	а «67.5K» пришлось бы расшифровывать.
+]]
+local SUFFIXES = table.freeze({
+	{ limit = 1e12, suffix = "T" },
+	{ limit = 1e9, suffix = "B" },
+	{ limit = 1e6, suffix = "M" },
+})
+
+function UiKit.FormatShort(value: number): string
+	local amount = math.floor(value)
+	local sign = if amount < 0 then "-" else ""
+	amount = math.abs(amount)
+
+	for _, step in SUFFIXES do
+		if amount >= step.limit then
+			-- Обрезание, а не округление: 1.99M обязано остаться 1.9M,
+			-- иначе кнопка обещает цену, которой игрок ещё не набрал.
+			local scaled = math.floor(amount / step.limit * 10) / 10
+			local text = if scaled % 1 == 0 then string.format("%d", scaled) else string.format("%.1f", scaled)
+			return `{sign}{text}{step.suffix}`
+		end
+	end
+
+	return sign .. UiKit.FormatAmount(amount)
 end
 
 -- 12345 -> "12 345". Длинные числа без разделителя читаются как каша.

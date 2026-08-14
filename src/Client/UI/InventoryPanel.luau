@@ -29,6 +29,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Abilities = require(Shared.Config.Abilities)
 local Icons = require(Shared.Config.Icons)
 local ItemIcon = require(script.Parent.ItemIcon)
 local Items = require(Shared.Config.Items)
@@ -82,6 +83,15 @@ local WIDE_CONTENT = 620
 local WIDE_BUTTON_WIDTH = 108
 local WIDE_BUTTON_HEIGHT = 34
 local WIDE_ACTIONS_HEIGHT = WIDE_BUTTON_HEIGHT * 2 + 6
+
+--[[
+	Блок способности питомца в колонке подробностей.
+
+	Значок 44 — тот же размер, что у метки строки списка: способность здесь
+	такой же самостоятельный предмет, как питомец в списке, и мельче она
+	перестаёт узнаваться.
+]]
+local ABILITY_ICON = 44
 
 -- Критерии сортировки питомцев. Порядок кнопок — этот же.
 local PET_SORTS = table.freeze({ "Type", "Rarity", "Power", "Stars" })
@@ -280,6 +290,38 @@ function InventoryPanel.Build(
 	levelLabel.TextStrokeTransparency = 0.2
 	levelLabel.ZIndex = 2
 
+	--[[
+		Способность, которую питомец даёт в бою: значок, название и описание.
+
+		Стоит в подробностях, а не в списке, по той же причине, по которой там
+		стоят характеристики: в ячейке сетки для неё нет места, а выбирают
+		питомца как раз по тому, чем он будет бить. До этого узнать, что даёт
+		конкретный зверь, можно было только начав им забег.
+
+		Живёт только в широкой раскладке: в узкой полосе снизу свободного места
+		нет вовсе, а урезать ради неё характеристики нельзя.
+	]]
+	local ability = UiKit.Frame(detail, "Ability", Palette.UI.slot)
+	ability.BackgroundTransparency = 0.25
+	ability.Visible = false
+	UiKit.Corners(ability, 8)
+
+	local abilityIcon = UiKit.Frame(ability, "IconHolder")
+	abilityIcon.Position = UDim2.fromOffset(8, 8)
+	abilityIcon.Size = UDim2.fromOffset(ABILITY_ICON, ABILITY_ICON)
+
+	local abilityName = UiKit.Label(ability, "Name", "", 14)
+	abilityName.Font = Enum.Font.GothamBold
+	abilityName.Position = UDim2.fromOffset(ABILITY_ICON + 16, 8)
+	abilityName.Size = UDim2.new(1, -(ABILITY_ICON + 24), 0, 18)
+
+	local abilityText = UiKit.Label(ability, "Text", "", 12, Palette.UI.subtext)
+	abilityText.Position = UDim2.fromOffset(ABILITY_ICON + 16, 26)
+	abilityText.Size = UDim2.new(1, -(ABILITY_ICON + 24), 1, -34)
+	abilityText.TextWrapped = true
+	abilityText.TextYAlignment = Enum.TextYAlignment.Top
+	abilityText.TextTruncate = Enum.TextTruncate.AtEnd
+
 	local actions = UiKit.Frame(detail, "Actions")
 	actions.AnchorPoint = Vector2.new(0, 1)
 	actions.Position = UDim2.new(0, 86, 1, -8)
@@ -357,6 +399,18 @@ function InventoryPanel.Build(
 			detailText.Size = UDim2.new(1, -84, 1, -(40 + WIDE_ACTIONS_HEIGHT + 16))
 			detailText.TextXAlignment = Enum.TextXAlignment.Left
 
+			--[[
+				Шкала опыта и блок способности переставляются вместе с текстом,
+				а не стоят числом с постройки: у питомца строка характеристик
+				в колонке занимает две строки вместо одной, и шкала, оставшаяся
+				на прежней высоте, наезжала на неё.
+			]]
+			levelBar.Position = UDim2.fromOffset(76, 84)
+			levelBar.Size = UDim2.new(1, -84, 0, 14)
+
+			ability.Position = UDim2.fromOffset(8, 106)
+			ability.Size = UDim2.new(1, -16, 1, -(106 + WIDE_ACTIONS_HEIGHT + 16))
+
 			actions.AnchorPoint = Vector2.new(0.5, 1)
 			actions.Position = UDim2.new(0.5, 0, 1, -8)
 			actions.Size = UDim2.new(1, -16, 0, WIDE_ACTIONS_HEIGHT)
@@ -383,6 +437,13 @@ function InventoryPanel.Build(
 			detailText.Position = UDim2.fromOffset(86, 38)
 			detailText.Size = UDim2.new(1, -96, 0, 26)
 			detailText.TextXAlignment = Enum.TextXAlignment.Left
+
+			levelBar.Position = UDim2.fromOffset(86, 60)
+			levelBar.Size = UDim2.new(1, -96, 0, 12)
+
+			-- В полосе снизу свободного места нет вовсе: способность показывает
+			-- только колонка.
+			ability.Visible = false
 
 			actions.AnchorPoint = Vector2.new(0, 1)
 			actions.Position = UDim2.new(0, 86, 1, -8)
@@ -432,9 +493,14 @@ function InventoryPanel.Build(
 		end
 
 		if caption ~= "" then
+			--[[
+				Подпись поднята над нижней фаской ячейки: в четырёх пикселях
+				от края она ложилась прямо на рисованный борт скина и читалась
+				с трудом.
+			]]
 			local label = UiKit.Label(cell, "Caption", caption, 12, captionColor)
 			label.AnchorPoint = Vector2.new(0.5, 1)
-			label.Position = UDim2.new(0.5, 0, 1, -4)
+			label.Position = UDim2.new(0.5, 0, 1, -9)
 			label.Size = UDim2.new(1, -6, 0, 14)
 			label.TextXAlignment = Enum.TextXAlignment.Center
 			label.RichText = true
@@ -486,21 +552,60 @@ function InventoryPanel.Build(
 			then `   stars <font color="#{value}">x{string.format("%.1f", pet.starMult)}</font>`
 			else ""
 
-		detailText.Size = UDim2.new(1, -96, 0, 18)
+		--[[
+			В колонке строка характеристик встаёт в две строки, в полосе снизу —
+			в одну. Высота задаётся здесь, а не в раскладке: у снаряжения этот
+			же ярлык растягивается на всю колонку, и общего числа у них нет.
+		]]
+		detailText.Size = if wideLayout then UDim2.new(1, -84, 0, 40) else UDim2.new(1, -96, 0, 18)
 		detailText.Text =
 			`{element}   power <font color="#{value}">{string.format("%.1f", pet.power)}</font>{starBonus}`
 
 		--[[
 			Шкала опыта. У максимального уровня она заполнена целиком: пустая
 			полоса на потолке читалась бы как «прогресс потерян».
+
+			Числа компактные: опыт высокого уровня — это миллионы, и полным
+			числом две подписи на шкале в двенадцать пикселей налезали друг
+			на друга сплошной кашей.
 		]]
 		local total = pet.xp + pet.xpToNext
 		local ratio = if pet.xpToNext > 0 and total > 0 then pet.xp / total else 1
 		levelBar.Visible = true
 		levelFill.Size = UDim2.fromScale(math.clamp(ratio, 0, 1), 1)
 		levelLabel.Text = if pet.xpToNext > 0
-			then `Lv {pet.level}   {pet.xp} / {total} xp`
-			else `Lv {pet.level}   максимум`
+			then `Lv {pet.level}   {UiKit.FormatShort(pet.xp)} / {UiKit.FormatShort(total)}`
+			else `Lv {pet.level}   max`
+
+		--[[
+			Способность питомца. Берётся из конфига по petId, а не приходит
+			в срезе: это неизменное свойство ВИДА, оно уже есть у клиента,
+			и слать его с каждым обновлением коллекции незачем.
+		]]
+		if wideLayout and def then
+			local abilityDef = Abilities.ByKey[def.starterAbility]
+			ability.Visible = abilityDef ~= nil
+
+			if abilityDef then
+				clearChildren(abilityIcon)
+				local image = UiKit.Image(abilityIcon, "Icon", Icons.Abilities[def.starterAbility])
+				if image then
+					image.Size = UDim2.fromScale(1, 1)
+				else
+					-- Ассета нет — остаётся кружок стихии: блок обязан
+					-- оставаться узнаваемым и без картинки.
+					local dot = UiKit.Frame(abilityIcon, "Dot", Palette.Element[abilityDef.element])
+					dot.Size = UDim2.fromScale(1, 1)
+					UiKit.Corners(dot, ABILITY_ICON // 2)
+				end
+
+				abilityName.Text = abilityDef.displayName
+				abilityName.TextColor3 = Palette.Element[abilityDef.element] or Palette.UI.text
+				abilityText.Text = abilityDef.description
+			end
+		else
+			ability.Visible = false
+		end
 
 		if pet.equipped then
 			local mark = actionButton("Equipped", "Equipped", Palette.UI.panel, 84)
@@ -523,7 +628,9 @@ function InventoryPanel.Build(
 				по кнопке понять было нельзя. Уровень теперь на шкале выше,
 				а кнопка отвечает ровно на один вопрос — сколько это стоит.
 			]]
-			upgrade.Text = UiKit.FormatAmount(pet.upgradeCost)
+			-- Компактно: цена уровня доходит до миллиардов, и полное число
+			-- не помещалось на кнопку — цифры налезали друг на друга.
+			upgrade.Text = UiKit.FormatShort(pet.upgradeCost)
 			UiKit.ButtonIcon(upgrade, Icons.Currency.essence, 16)
 			UiKit.SetEnabled(upgrade, essenceBalance >= pet.upgradeCost)
 			upgrade.Activated:Connect(function()
@@ -890,11 +997,12 @@ function InventoryPanel.Build(
 		clearChildren(controls)
 
 		--[[
-			Шкала опыта — только у питомцев, и сбрасывается здесь, а не в трёх
-			ветках подробностей: забыть её в одной из них означало бы полосу
-			чужого питомца под описанием сапог.
+			Шкала опыта и блок способности — только у питомцев, и сбрасываются
+			здесь, а не в трёх ветках подробностей: забыть их в одной из них
+			означало бы полосу и способность чужого питомца под описанием сапог.
 		]]
 		levelBar.Visible = false
+		ability.Visible = false
 		detailText.Size = UDim2.new(1, -96, 0, 30)
 
 		local section = tabs.Current()
