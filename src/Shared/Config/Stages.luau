@@ -178,6 +178,23 @@ function Stages.LocationFor(index: number): (LocationDef?, number)
 	return nil, 0
 end
 
+--[[
+	Ключ палитры и биома для уровня.
+
+	Одна функция на всех, кому нужно знать, как выглядит арена: сервер красит
+	ею пол и препятствия, клиент — свет, туман и декор. Раньше ключ считал
+	только клиент своим кодом, а сервер не считал вовсе — отсюда и брался
+	серый пол под зелёным туманом.
+
+	Ноль и любой номер за пределами сюжета откатываются на первую локацию:
+	сюда приходит обучение (у него номера нет) и бесконечный режим, если
+	игрок ещё не выиграл ни одного сюжетного уровня.
+]]
+function Stages.PaletteFor(index: number): string
+	local stage = if index > 0 then Stages.Get(index) else nil
+	return if stage then stage.location.palette else locations[1].palette
+end
+
 function Stages.IsLocationFinal(index: number): boolean
 	local location, indexInLocation = Stages.LocationFor(index)
 	return location ~= nil and indexInLocation == location.levels

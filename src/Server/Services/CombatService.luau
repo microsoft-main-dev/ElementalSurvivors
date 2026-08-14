@@ -40,6 +40,7 @@ local PickupService = require(script.Parent.PickupService)
 local ProgressionService = require(script.Parent.ProgressionService)
 local RewardService = require(script.Parent.RewardService)
 local StageService = require(script.Parent.StageService)
+local Stages = require(Shared.Config.Stages)
 local TalentService = require(script.Parent.TalentService)
 local TutorialService = require(script.Parent.TutorialService)
 local Types = require(Shared.Types)
@@ -364,7 +365,23 @@ function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex:
 		return false
 	end
 
-	local slot = ArenaService.Acquire(player)
+	--[[
+		Как выглядит арена, решается ДО её постройки: от локации зависят
+		и материал пола, и цвет земли, и породы деревьев.
+
+		У сюжета локация своя. У обучения её нет вовсе, и оно берёт первую —
+		обучающий уровень и так собран из первого сюжетного. Бесконечный режим
+		берёт ПОСЛЕДНЮЮ ОТКРЫТУЮ (решение владельца): своей локации у него нет,
+		и арена, меняющаяся по мере прохождения сюжета, — единственный способ
+		не показывать ветерану ту же поляну, что новичку.
+	]]
+	local paletteStage = if mode == "Story"
+		then stageIndex
+		elseif mode == "Endless" then StageService.HighestUnlocked(player)
+		else 0
+	local paletteKey = Stages.PaletteFor(paletteStage)
+
+	local slot = ArenaService.Acquire(player, paletteKey)
 	if not slot then
 		notify(player, "All arenas are busy. Try again in a moment.")
 		return false
@@ -388,6 +405,23 @@ function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex:
 	humanoid.MaxHealth = loadout.maxHealth
 	humanoid.Health = loadout.maxHealth
 	humanoid.WalkSpeed = loadout.walkSpeed
+
+	--[[
+		В БОЮ НЕ ПРЫГАЮТ. Это не косметика жанра, а закрытая дыра: враги
+		расталкиваются от круга препятствия, поэтому забравшийся на холм
+		становился недосягаем для всей арены разом. Запас по высоте эту дыру
+		не закрывает — прыжок достаёт 7.2 стада, перешагивание добавляет ещё
+		около двух, а холм выше пятнадцати перестаёт быть холмом.
+
+		Отнимать прыжок дешевле и надёжнее: он закрывает и всё, на что можно
+		будет залезть потом, — валуны, тела боссов, будущий декор. Бой
+		автоматический, игрок в нём только ходит, и прыжок не делает ничего.
+
+		Возвращать не нужно: забег заканчивается player:LoadCharacter(),
+		и новый персонаж приходит с настройками StarterPlayer.
+	]]
+	humanoid.UseJumpPower = true
+	humanoid.JumpPower = 0
 
 	root.CFrame = ArenaService.GetSpawnCFrame(slot)
 
@@ -463,7 +497,21 @@ function CombatService.BeginRun(player: Player, mode: Types.RunMode, stageIndex:
 	-- с тем, что реально подобрано на сервере.
 	local remote = runStartedRemote
 	if remote then
-		remote:FireClient(player, slot, ArenaService.GetSeed(slot), loadout.magnetRadius, mode, run.stageIndex)
+		--[[
+			Ключ локации уезжает готовым, а не выводится клиентом из номера
+			уровня. У бесконечного режима номера нет вовсе (там ноль), и
+			вторая формула на клиенте разъехалась бы с серверной в первый
+			же день: пол был бы одной локации, а деревья — другой.
+		]]
+		remote:FireClient(
+			player,
+			slot,
+			ArenaService.GetSeed(slot),
+			loadout.magnetRadius,
+			mode,
+			run.stageIndex,
+			paletteKey
+		)
 	end
 	sendSnapshot(run)
 

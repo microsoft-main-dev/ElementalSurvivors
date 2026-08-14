@@ -8,9 +8,11 @@
 	скриптом, не реплицируются — значит палитру каждый клиент ставит себе сам.
 	Это и делается здесь, и это же станет точкой входа для 20 локаций в M6.
 
-	Декор арены строит ArenaService на сервере: колонна с настоящей коллизией
-	обязана быть серверной, потому что физику игрока проверяет сервер.
-	Визуал способностей живёт в AbilityFxController.
+	Тела препятствий строит ArenaService на сервере: холм и ствол с настоящей
+	коллизией обязаны быть серверными, потому что физику игрока проверяет
+	сервер. Всё, у чего коллизии нет, — деревья, кусты, трава, опушка —
+	собирает ArenaDecorController. Визуал способностей живёт
+	в AbilityFxController.
 ]]
 
 local Lighting = game:GetService("Lighting")
@@ -20,7 +22,6 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Balance = require(Shared.Config.Balance)
 local Net = require(Shared.Net)
 local Palette = require(Shared.Config.Palette)
-local Stages = require(Shared.Config.Stages)
 
 local ArenaController = {}
 
@@ -58,14 +59,17 @@ end
 --[[
 	Палитра локации, в которой идёт забег.
 
-	Номер уровня приходит вместе со стартом, а сам уровень собирается той же
-	функцией, что и на сервере — Stages.Get. Локация без своей записи
-	откатывается на общую палитру: забытый цвет не должен ронять бой.
+	Ключ приходит готовым вместе со стартом забега: его посчитал сервер
+	(Stages.PaletteFor), и он же красит пол и препятствия. Раньше клиент
+	выводил его сам из номера уровня — и бесконечный режим, у которого
+	номера нет, получал серую палитру поверх зелёной арены.
+
+	Локация без своей записи откатывается на общую: забытый цвет не должен
+	ронять бой.
 ]]
-local function paletteFor(stageIndex: number): typeof(Palette.Arena)
-	local stage = if stageIndex > 0 then Stages.Get(stageIndex) else nil
-	local named = if stage then Palette.Arenas[stage.location.palette] else nil
-	return named or Palette.Arena
+local function paletteFor(paletteKey: string): typeof(Palette.Arena)
+	local named: any = Palette.Arenas
+	return named[paletteKey] or Palette.Arena
 end
 
 local function applyArenaLighting(palette: typeof(Palette.Arena)): ()
@@ -87,13 +91,14 @@ local function applyArenaLighting(palette: typeof(Palette.Arena)): ()
 end
 
 function ArenaController.Start(): ()
-	Net.GetEvent(Net.Id.RunStarted).OnClientEvent
-		:Connect(function(_slot: number, _seed: number, _magnet: number, _mode: string, stageIndex: number)
+	Net.GetEvent(Net.Id.RunStarted).OnClientEvent:Connect(
+		function(_slot: number, _seed: number, _magnet: number, _mode: string, _stageIndex: number, paletteKey: string)
 			if not lobbySnapshot then
 				lobbySnapshot = snapshotLighting()
 			end
-			applyArenaLighting(paletteFor(stageIndex))
-		end)
+			applyArenaLighting(paletteFor(paletteKey))
+		end
+	)
 
 	Net.GetEvent(Net.Id.RunEnded).OnClientEvent:Connect(function()
 		local snapshot = lobbySnapshot

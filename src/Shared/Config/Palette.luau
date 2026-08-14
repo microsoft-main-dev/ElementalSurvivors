@@ -4,7 +4,13 @@
 
 	Стиль плоский low-poly (раздел 2.1 ТЗ): силуэт и цвет — единственные средства
 	различения объектов, поэтому палитра должна быть узкой и контрастной.
-	Материалы только SmoothPlastic и Neon, текстур нет.
+	Материалы у всего, что участвует в бою, — только SmoothPlastic и Neon.
+
+	Исключение одно: декор арены (Config/ArenaProps). Трава, земля, кора и
+	камень просят фактуры, и встроенные материалы движка (Grass, Ground, Rock,
+	Wood) её дают бесплатно — это не ассеты, правило 4 их не касается.
+	На читаемость боя это не влияет: враг, снаряд и подбираемое остаются
+	плоскими и потому по-прежнему отличаются от фона.
 
 	Фирменные цвета взяты с логотипа 4pots games.
 ]]
@@ -279,14 +285,38 @@ local Palette = {
 
 		Пол намеренно светлее тумана: туман виден только как контраст,
 		а тёмный туман поверх тёмного пола не читается вообще.
+
+		ЦВЕТА ДЕКОРА (earth и ниже) обязаны быть в КАЖДОЙ записи Arenas, а не
+		только здесь: Config/Biomes сверяет их наличие ассертом в обе стороны.
+		Забытый цвет — это белое дерево посреди леса, и заметить это в тумане
+		можно не сразу, а модель декора без цвета не строится вовсе.
+
+		Эта запись — откат для арены без локации (бесконечный режим до первой
+		победы). Она нейтрально-серая намеренно: локация, забывшая палитру,
+		обязана выглядеть чужой, а не «почти как поляна».
 	]]
 	Arena = table.freeze({
 		floor = Color3.fromHex("#2E4349"),
 		floorAccent = Color3.fromHex("#3A5359"),
-		decor = Color3.fromHex("#3E5A62"),
-		decorAccent = Color3.fromHex("#54A08F"),
 		fog = Color3.fromHex("#080E10"),
 		exit = Color3.fromHex("#E2603A"),
+
+		earth = Color3.fromHex("#3E5058"),
+		earthDark = Color3.fromHex("#2A383E"),
+		moss = Color3.fromHex("#4A6B62"),
+		rock = Color3.fromHex("#5A6A70"),
+		rockDark = Color3.fromHex("#3C494E"),
+		trunk = Color3.fromHex("#4E4438"),
+		trunkDark = Color3.fromHex("#332C24"),
+		leaf = Color3.fromHex("#456B5E"),
+		leafDark = Color3.fromHex("#2F4E44"),
+		needle = Color3.fromHex("#3A5A54"),
+		needleDark = Color3.fromHex("#27403C"),
+		blade = Color3.fromHex("#4A6660"),
+		bladeDry = Color3.fromHex("#6B6A52"),
+		bloom = Color3.fromHex("#C9C0A0"),
+		wall = Color3.fromHex("#16232A"),
+		patch = Color3.fromHex("#354B51"),
 	}),
 
 	--[[
@@ -299,21 +329,74 @@ local Palette = {
 		мгновенно, иначе смена локации не ощущается вовсе.
 	]]
 	Arenas = table.freeze({
+		--[[
+			Лесная поляна. Тёплая и светлая: солнце сквозь листву, земля рыжая,
+			трава жёлто-зелёная. Хвоя здесь есть, но редкая — ель на поляне
+			стоит гостьей, и цвет у неё чуть холоднее лиственной кроны.
+
+			Земля холма заметно рыжее пола: холм обязан читаться как холм с
+			одного взгляда, а земля того же цвета, что и трава под ногами,
+			превращает его в пятно.
+		]]
 		ForestGlade = table.freeze({
 			floor = Color3.fromHex("#33502F"),
 			floorAccent = Color3.fromHex("#3F6238"),
-			decor = Color3.fromHex("#4A6B3C"),
-			decorAccent = Color3.fromHex("#8FD3AC"),
 			fog = Color3.fromHex("#0E1A10"),
 			exit = Color3.fromHex("#E2603A"),
+
+			earth = Color3.fromHex("#7A5A38"),
+			earthDark = Color3.fromHex("#553D26"),
+			moss = Color3.fromHex("#5FA83E"),
+			rock = Color3.fromHex("#8A8C7A"),
+			rockDark = Color3.fromHex("#5F6154"),
+			trunk = Color3.fromHex("#6B4A2A"),
+			trunkDark = Color3.fromHex("#4A3320"),
+			leaf = Color3.fromHex("#5FA83E"),
+			leafDark = Color3.fromHex("#427A2C"),
+			needle = Color3.fromHex("#3E7A4A"),
+			needleDark = Color3.fromHex("#2C5A38"),
+			blade = Color3.fromHex("#6FB04A"),
+			bladeDry = Color3.fromHex("#B0A052"),
+			bloom = Color3.fromHex("#E8CE4B"),
+			-- Задник опушки: он не должен быть чёрным. Чёрная стена за
+			-- деревьями читается дырой, а не глубиной леса.
+			wall = Color3.fromHex("#24401F"),
+			patch = Color3.fromHex("#3E5C34"),
 		}),
+
+		--[[
+			Дремучий лес. Холодный и тёмный: земля серо-бурая, хвоя почти синяя,
+			трава жухлая. Лиственные цвета здесь тоже есть — на сухостой и
+			редкие кусты, — но они темнее поляны на всю ступень.
+
+			Камень серее и холоднее, чем на поляне: один и тот же валун в двух
+			локациях обязан выглядеть по-разному, иначе разницы между лесами
+			не будет вовсе.
+		]]
 		DeepForest = table.freeze({
 			floor = Color3.fromHex("#1E2E28"),
 			floorAccent = Color3.fromHex("#26382F"),
-			decor = Color3.fromHex("#2A3D33"),
-			decorAccent = Color3.fromHex("#4FA97C"),
 			fog = Color3.fromHex("#060B08"),
 			exit = Color3.fromHex("#E2603A"),
+
+			earth = Color3.fromHex("#4A4034"),
+			earthDark = Color3.fromHex("#302A22"),
+			moss = Color3.fromHex("#3E6B36"),
+			rock = Color3.fromHex("#5A6058"),
+			rockDark = Color3.fromHex("#383E38"),
+			trunk = Color3.fromHex("#4A3524"),
+			trunkDark = Color3.fromHex("#2E2118"),
+			leaf = Color3.fromHex("#3A6B32"),
+			leafDark = Color3.fromHex("#27502A"),
+			needle = Color3.fromHex("#2C5238"),
+			needleDark = Color3.fromHex("#1C3A28"),
+			blade = Color3.fromHex("#406B38"),
+			bladeDry = Color3.fromHex("#6E6A40"),
+			-- Единственное тёплое пятно в чаще — шляпки грибов. Их немного,
+			-- и они же служат ориентиром на однотонном тёмном полу.
+			bloom = Color3.fromHex("#C0392B"),
+			wall = Color3.fromHex("#0E1A14"),
+			patch = Color3.fromHex("#243830"),
 		}),
 	}),
 
