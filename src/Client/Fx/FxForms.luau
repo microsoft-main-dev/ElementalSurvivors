@@ -559,8 +559,16 @@ local function stepRing(
 			вовсе: аура бьёт по всей области каждые полсекунды, и вспышка
 			на всей толпе разом — это уже не отклик, а мигание экрана.
 		]]
+		--[[
+			Отскока у орба нет намеренно (последний аргумент). Вспышка зовётся
+			здесь каждый кадр, пока орб летит, а отскок рассчитан на одиночное
+			попадание: складываясь кадр за кадром, он уводил врага на метры,
+			причём в сторону от орба — то есть половину круга ПРЯМО НА игрока.
+			Толпа выглядела притянутой вплотную, хотя на сервере никто никуда
+			не двигался.
+		]]
 		if flashRadius then
-			EnemyRenderController.Flash(position - origin, 0, flashRadius, flashColour(def.element))
+			EnemyRenderController.Flash(position - origin, 0, flashRadius, flashColour(def.element), nil, nil, false)
 		end
 	end
 
